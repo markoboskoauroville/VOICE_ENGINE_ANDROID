@@ -32,3 +32,5 @@ A settings key added on the Mac is added to `SubSettings.kt` too (same name, sam
 - MA Reader does not start after a reboot or a Termux kill; `talk` then quietly uses Speechify directly (subtitles still
   work). Start: `cd ~/.maread-web && setsid nohup /data/data/com.termux/files/usr/bin/python3 server.py >server.log 2>&1 &`.
 - Not built yet: the Mac's voice picker (`voice` key) has no row here; the phone's voice is chosen by `talk`.
+
+**State 8.11.2026: v2** PAUSE / CONTINUE on the subtitle; Reading + PauseSync from VOICE_ENGINE_UNIVERSAL (submodule). GitHub run 42530569905 green, release v2, installed on the Pixel 7 (cable + Wi-Fi), seen in a screenshot (pause bars, then play triangle with the word held).
