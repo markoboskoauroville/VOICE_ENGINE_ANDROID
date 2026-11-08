@@ -96,7 +96,7 @@ class VoiceService : Service() {
         super.onCreate()
         instance = this
         conf = SubSettings.load(this)
-        overlay = SubtitleOverlay(this, { hidePressed() }, { stopPressed() }, { y -> dragged(y) })
+        overlay = SubtitleOverlay(this, { pausePressed() }, { hidePressed() }, { stopPressed() }, { y -> dragged(y) })
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Voice Engine", NotificationManager.IMPORTANCE_LOW).apply {
             setShowBadge(false)
@@ -178,6 +178,8 @@ class VoiceService : Service() {
         if (words.isEmpty() && dur > 0) words = Reading.estimate(text, dur)
         if (!p.isNaN()) clock.sample(p, nowS(), paused)
         lastPos = SystemClock.elapsedRealtime()
+        pauseSync.sync(paused, nowS())
+        overlay.setPaused(pauseSync.paused)
         if (wasPaused != paused) notifyNow()
     }
 
@@ -186,6 +188,7 @@ class VoiceService : Service() {
         if (id.isNotEmpty() && rid.isNotEmpty() && id != rid) return
         reading = false
         paused = false
+        pauseSync.reset(); overlay.setPaused(false)
         main.removeCallbacks(tick)
         if (overlay.shown && shownPiece >= 0) { lit = -1; paintPiece(shownPiece, -1) }
         if (overlay.shown && conf.linger > 0) {
@@ -246,6 +249,16 @@ class VoiceService : Service() {
         if (reading) pendingCmd.set("stop")
         hidePressed()
         main.postDelayed({ if (reading) endReading(rid) }, 2500)
+    }
+
+    private val pauseSync = PauseSync()
+
+    /** PAUSE / CONTINUE on the subtitle: the same toggle as the notification's, the button flips at once (PauseSync). */
+    fun pausePressed() {
+        if (!reading) return
+        pauseSync.press(nowS())
+        pendingCmd.set("toggle")
+        overlay.setPaused(pauseSync.paused)
     }
 
     fun togglePressed() {

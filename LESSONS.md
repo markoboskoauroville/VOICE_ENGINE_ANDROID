@@ -11,3 +11,6 @@
    `openssl pkcs12 -export`. Keep the key outside the repo (`*.p12` in .gitignore).
 5. **Creating the repo and writing secrets is stopped by the auto-mode classifier** until Marko says yes; ask once
    with both actions in one question.
+
+## v2, 8.11.2026: PAUSE on the subtitle, rule from VOICE_ENGINE_UNIVERSAL
+Marko: "there is a stop, there is a hide, but there is no pause". PAUSE / CONTINUE is the first key on the subtitle (contentDescription Pause / Continue); a press sets the talker's pending `toggle`, flips the key at once, and PauseSync (1.5 s guard) then follows `paused` from /pos. Reading.kt and PauseSync.kt come from the public repo VOICE_ENGINE_UNIVERSAL (git submodule `universal/`, gradle srcDir, workflow checkout with submodules). Change the rule there, `git submodule update --remote` here.

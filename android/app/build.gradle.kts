@@ -43,4 +43,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    // the shared mechanism (VOICE_ENGINE_UNIVERSAL, git submodule): Reading.kt, PauseSync.kt
+    sourceSets.getByName("main").java.srcDir("../../universal/kotlin")
 }

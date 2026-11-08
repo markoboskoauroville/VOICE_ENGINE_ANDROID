@@ -31,6 +31,7 @@ import kotlin.math.abs
  */
 class SubtitleOverlay(
     private val ctx: Context,
+    private val onPause: () -> Unit,
     private val onHide: () -> Unit,
     private val onStop: () -> Unit,
     private val onDragged: (Double) -> Unit,
@@ -42,6 +43,10 @@ class SubtitleOverlay(
     private var params: WindowManager.LayoutParams? = null
     private var conf = SubSettings()
     private var dragging = false
+    private var pauseKey: KeyIcon? = null
+
+    /** PAUSE reads CONTINUE (a play triangle) while the voice waits (SPEC.md section 3). */
+    fun setPaused(p: Boolean) { pauseKey?.setPaused(p) }
 
     val shown: Boolean get() = band != null
 
@@ -63,6 +68,8 @@ class SubtitleOverlay(
         }
         val keys = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
         val k = dp(46f)
+        pauseKey = KeyIcon(ctx, KeyIcon.PAUSE) { onPause() }
+        keys.addView(pauseKey, LinearLayout.LayoutParams(k, k))
         keys.addView(KeyIcon(ctx, KeyIcon.HIDE) { onHide() }, LinearLayout.LayoutParams(k, k))
         keys.addView(KeyIcon(ctx, KeyIcon.STOP) { onStop() }, LinearLayout.LayoutParams(k, k))
         val b = LinearLayout(ctx).apply {
@@ -195,19 +202,23 @@ class SubtitleOverlay(
     }
 }
 
-/** HIDE (a caption bubble crossed out) and STOP (a square), drawn, as the Mac's two SF Symbols. */
+/** PAUSE (two bars, a triangle while paused), HIDE (a caption bubble crossed out) and STOP (a square), drawn, as the Mac's SF Symbols. */
 class KeyIcon(ctx: Context, private val kind: Int, private val action: () -> Unit) : View(ctx) {
     companion object {
         const val HIDE = 0
         const val STOP = 1
+        const val PAUSE = 2
     }
+
+    private var paused = false
+    fun setPaused(p: Boolean) { if (p == paused) return; paused = p; contentDescription = if (p) "Continue" else "Pause"; invalidate() }
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(235, 235, 235, 235); strokeCap = Paint.Cap.ROUND }
 
     init {
         isClickable = true
         isFocusable = false
-        contentDescription = if (kind == HIDE) "Hide" else "Stop"
+        contentDescription = when (kind) { HIDE -> "Hide"; PAUSE -> "Pause"; else -> "Stop" }
         setOnClickListener { action() }
     }
 
@@ -216,6 +227,17 @@ class KeyIcon(ctx: Context, private val kind: Int, private val action: () -> Uni
         val s = minOf(width, height) * 0.5f
         val cx = width / 2f
         val cy = height / 2f
+        if (kind == PAUSE) {
+            paint.style = Paint.Style.FILL
+            if (paused) {
+                val p = android.graphics.Path().apply { moveTo(cx - s * 0.32f, cy - s * 0.46f); lineTo(cx + s * 0.5f, cy); lineTo(cx - s * 0.32f, cy + s * 0.46f); close() }
+                c.drawPath(p, paint)
+            } else {
+                c.drawRoundRect(cx - s * 0.42f, cy - s * 0.42f, cx - s * 0.1f, cy + s * 0.42f, s * 0.06f, s * 0.06f, paint)
+                c.drawRoundRect(cx + s * 0.1f, cy - s * 0.42f, cx + s * 0.42f, cy + s * 0.42f, s * 0.06f, s * 0.06f, paint)
+            }
+            return
+        }
         if (kind == STOP) {
             paint.style = Paint.Style.FILL
             c.drawRoundRect(cx - s * 0.42f, cy - s * 0.42f, cx + s * 0.42f, cy + s * 0.42f, s * 0.08f, s * 0.08f, paint)
