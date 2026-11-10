@@ -9,6 +9,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.util.Base64
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -37,6 +40,7 @@ import java.util.concurrent.atomic.AtomicReference
  *   POST /start {id,text,words}   a reading begins; words [{s,e,t,d}] as MA Reader's (code points, seconds), may be []
  *   POST /pos {id,pos,paused,dur} where the voice is -> {"cmd": "" | "stop" | "toggle"}
  *   POST /end {id}                the voice stopped; the last words stay `linger` seconds
+ *   POST /play {id,text,audio,words,dur}   v3: the engine plays the sound itself (audio = base64 mp3), with the subtitle
  *   POST /test {text,seconds}     a subtitle without a voice, to see how it looks
  *   POST /hide, /stop, /toggle    the subtitle's HIDE, its STOP, the notification's pause/play
  *   POST /subtitles {on}          SUB
@@ -123,6 +127,7 @@ class VoiceService : Service() {
         main.removeCallbacksAndMessages(null)
         overlay.close()
         try { server?.close() } catch (e: java.io.IOException) { }
+        stopPlayer()
         pool.shutdownNow()
         super.onDestroy()
     }
@@ -155,6 +160,56 @@ class VoiceService : Service() {
         notifyNow()
         main.removeCallbacks(tick)
         main.post(tick)
+    }
+
+    // v3: the engine's own player (phonesay, 10.11.2026), so no audio file ever opens in another app
+    private var player: MediaPlayer? = null
+    private var playJob: Runnable? = null
+
+    private fun play(j: JSONObject): Boolean {
+        val a = j.optString("audio", "")
+        if (a.isEmpty() || j.optString("text", "").isBlank()) return false
+        stopPlayer()
+        val f = java.io.File(cacheDir, "play.mp3")
+        try { f.writeBytes(Base64.decode(a, Base64.DEFAULT)) } catch (e: Exception) { return false }
+        val mp = MediaPlayer()
+        try {
+            mp.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            mp.setDataSource(f.absolutePath)
+            mp.prepare()
+        } catch (e: Exception) { mp.release(); return false }
+        j.put("dur", mp.duration / 1000.0)
+        startReading(j)
+        player = mp
+        mp.setOnCompletionListener { stopPlayer() }
+        mp.start()
+        val job = object : Runnable {
+            override fun run() {
+                val m = player ?: return
+                position(JSONObject().put("id", rid).put("pos", m.currentPosition / 1000.0).put("paused", !m.isPlaying && paused).put("dur", m.duration / 1000.0))
+                main.postDelayed(this, 150)
+            }
+        }
+        playJob = job
+        main.post(job)
+        return true
+    }
+
+    private fun stopPlayer() {
+        playJob?.let { main.removeCallbacks(it) }; playJob = null
+        val m = player ?: return
+        player = null
+        try { m.stop() } catch (e: Exception) { }
+        m.release()
+        endReading(rid)
+    }
+
+    private fun toggleLocal(): Boolean {
+        val m = player ?: return false
+        if (m.isPlaying) { m.pause(); paused = true } else { m.start(); paused = false }
+        pendingCmd.set("")
+        return true
     }
 
     private fun rawWords(a: JSONArray?): List<DoubleArray> {
@@ -246,7 +301,8 @@ class VoiceService : Service() {
 
     /** STOP: the reading ends completely (the talker hears it in its next /pos, within a fifth of a second). */
     fun stopPressed() {
-        if (reading) pendingCmd.set("stop")
+        if (player != null) stopPlayer()
+        else if (reading) pendingCmd.set("stop")
         hidePressed()
         main.postDelayed({ if (reading) endReading(rid) }, 2500)
     }
@@ -258,11 +314,12 @@ class VoiceService : Service() {
         if (!reading) return
         pauseSync.press(nowS())
         pendingCmd.set("toggle")
+        toggleLocal()
         overlay.setPaused(pauseSync.paused)
     }
 
     fun togglePressed() {
-        if (reading) pendingCmd.set("toggle")
+        if (reading) { pendingCmd.set("toggle"); toggleLocal() }
     }
 
     fun setSubtitles(on: Boolean) {
@@ -376,7 +433,7 @@ class VoiceService : Service() {
     private fun handle(c: Socket) {
         c.use { sock ->
             try {
-                sock.soTimeout = 5000
+                sock.soTimeout = 15000
                 val inp = BufferedInputStream(sock.getInputStream())
                 val first = readLine(inp) ?: return
                 val parts = first.split(" ")
@@ -390,7 +447,7 @@ class VoiceService : Service() {
                     val i = h.indexOf(':')
                     if (i > 0 && h.substring(0, i).trim().equals("content-length", true)) len = h.substring(i + 1).trim().toIntOrNull() ?: 0
                 }
-                if (len > 2_000_000) return
+                if (len > 16_000_000) return
                 val body = ByteArray(len)
                 var got = 0
                 while (got < len) {
@@ -426,6 +483,7 @@ class VoiceService : Service() {
         return when {
             path == "/status" || path == "/" -> 200 to (onMain { status() } ?: JSONObject().put("app", "voiceengine"))
             post && path == "/start" -> { onMain { startReading(j) }; 200 to ok().put("subtitles", conf.subtitles) }
+            post && path == "/play" -> { val r = onMain { play(j) } ?: false; (if (r) 200 else 400) to JSONObject().put("ok", r).put("subtitles", conf.subtitles) }
             post && path == "/pos" -> { onMain { position(j) }; 200 to JSONObject().put("cmd", pendingCmd.getAndSet("")) }
             post && path == "/end" -> { onMain { endReading(j.optString("id", "")) }; 200 to ok() }
             post && path == "/test" -> {
