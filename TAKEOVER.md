@@ -93,3 +93,5 @@ made on the phone with openssl and lives in `~/.voiceengine-signing/`). Version:
 
 Package `community.auroville.voiceengine`, minSdk 30, Kotlin, no libraries. `Reading.kt` (the clock, which word is
 lit, the pieces) imports nothing from Android.
+
+**State 10.11.2026: v3** `POST /play {id,text,audio(base64 mp3)}`: the engine plays the sound with its own MediaPlayer and draws the subtitle (word timings estimated from the clip length; PAUSE/STOP act on the player). `phonesay "text" [hr|en]` on the Mac uses it (adb forward -> 127.0.0.1:8720); it no longer opens an mp3 in MX Player, and refuses unknown options. GitHub run 42746571026 green, release v3 Latest, installed on the Nothing (A142), screenshot showed the subtitle over the launcher, no other app.

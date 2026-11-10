@@ -51,3 +51,6 @@ after its end.
 ## Run log
 
 - 7.11.2026: v1 built (CI green first push), installed, tested; MA Reader started again (was just not running).
+
+## From the Mac: phonesay (v3, 10.11.2026)
+`phonesay "text" [hr|en]` renders with langsay --out and POSTs it to the app's /play over adb forward; the engine plays it with subtitles. Never open an audio file in a player app for Marko. Needs v3 on the phone. Test quiet (media volume 3, restore after).

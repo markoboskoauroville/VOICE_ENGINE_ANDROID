@@ -9,4 +9,4 @@
   Started with Termux's python; Croatian through Edge and English through Speechify, both via MA Reader, verified.
 - 7.11.2026. Marko: "please close the project, write takeovers and skills". **Status: done** (this TAKEOVER, LESSONS,
   the skill, the manifest).
-- 10.11.2026. Marko: "Also there is some bug when you talk to me through my Nothing phone, audio files get open. I have audio engine with subtitles in this phone and this should be used." **Status: in progress** (phonesay opened the mp3 in MX Player; the engine only drew subtitles for `talk`; v3 gets /play so the engine plays the sound itself).
+- 10.11.2026. Marko: "Also there is some bug when you talk to me through my Nothing phone, audio files get open. I have audio engine with subtitles in this phone and this should be used." **Status: done (v3, release Latest, tested on the Nothing)** (phonesay opened the mp3 in MX Player; the engine only drew subtitles for `talk`; v3 gets /play so the engine plays the sound itself).
