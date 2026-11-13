@@ -183,6 +183,14 @@ class MainActivity : Activity() {
             }))
         }
 
+        // v8: Auto-rotate stays off; the engine needs "Modify system settings" to put it back.
+        if (!Settings.System.canWrite(this)) {
+            box.addView(label("AUTO-ROTATE GUARD NEEDS \"MODIFY SYSTEM SETTINGS\"", 13f, Color.parseColor("#FF6B5E")))
+            box.addView(row(word("ALLOW", true) {
+                startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:$packageName")))
+            }))
+        } else box.addView(label("AUTO-ROTATE: KEPT OFF (caught ${VoiceService.instance?.rotation?.caught ?: 0} times)", 12f, dim, 6))
+
         // v4 (13.11.2026): the voice is Speechify, spoken here; other computers send text only.
         box.addView(label("VOICE (SPEECHIFY)"))
         box.addView(label(if (Speechify.hasKey(this)) "KEYS: ${Speechify.keys(this).size} · SPEAKING ON ${Speechify.ringLabel(this)} · VOICE ${Speechify.voice(this).uppercase()}" else "KEY: NONE YET · PICK THE FILE WITH YOUR SPEECHIFY KEY", 12f, dim, 4))

@@ -102,6 +102,7 @@ class VoiceService : Service() {
         super.onCreate()
         instance = this
         conf = SubSettings.load(this)
+        rotation.start()
         overlay = SubtitleOverlay(this, { pausePressed() }, { hidePressed() }, { stopPressed() }, { y -> dragged(y) })
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Voice Engine", NotificationManager.IMPORTANCE_LOW).apply {
@@ -125,6 +126,7 @@ class VoiceService : Service() {
     }
 
     override fun onDestroy() {
+        rotation.stop()
         instance = null
         main.removeCallbacksAndMessages(null)
         overlay.close()
@@ -169,6 +171,8 @@ class VoiceService : Service() {
     @Volatile var lastSayError = ""
     // v7: the phone lock (Claude is using the phone), see Lock.kt
     val lock by lazy { Lock(this) }
+    // v8: Auto-rotate stays off (RotationGuard)
+    val rotation by lazy { RotationGuard(this) }
     private var playJob: Runnable? = null
 
     private fun play(j: JSONObject): Boolean {
@@ -512,7 +516,8 @@ class VoiceService : Service() {
                     200 to JSONObject().put("ok", true).put("voice", voice).put("subtitles", conf.subtitles)
                 }
             }
-            post && path == "/lock" -> { onMain { lock.on(j.optString("text", "Working on the phone. It will be yours again when this disappears.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
+            post && path == "/lock" -> { onMain { lock.on(j.optString("text", "Working on the phone. It will be yours again when this disappears.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state).put("rotation_guard", if (rotation.allowed()) "on" else "needs permission")
+            .put("rotation_caught", rotation.caught).put("rotation_last", rotation.lastAt) }
             post && path == "/unlock" -> { onMain { lock.off() }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/through" -> { onMain { lock.through(j.optLong("ms", 800L)) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/play" -> { val r = onMain { play(j) } ?: false; (if (r) 200 else 400) to JSONObject().put("ok", r).put("subtitles", conf.subtitles) }
