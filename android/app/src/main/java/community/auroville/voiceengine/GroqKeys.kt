@@ -99,7 +99,7 @@ object GroqKeys {
         val boundary = "----ve" + System.nanoTime()
         val out = ByteArrayOutputStream()
         fun field(n: String, v: String) { out.write("--$boundary\r\nContent-Disposition: form-data; name=\"$n\"\r\n\r\n$v\r\n".toByteArray()) }
-        field("model", MODEL); field("response_format", "json"); field("temperature", "0")
+        field("model", MODEL); field("language", "en"); field("response_format", "json"); field("temperature", "0")
         out.write("--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"reply.wav\"\r\nContent-Type: audio/wav\r\n\r\n".toByteArray())
         out.write(wav); out.write("\r\n--$boundary--\r\n".toByteArray())
         val conn = (URL("$BASE/audio/transcriptions").openConnection() as HttpURLConnection).apply {

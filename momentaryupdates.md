@@ -33,3 +33,4 @@ Marko: "voice engine is not good. It doesn't stop. Please don't automatically re
 ## 13.11.2026 (on the Pixel 7): the TTT recording interface
 Marko: "please copy the user interface of my TTT for recording and sending. Simply, I will send when I press Send. If there is an error (like in TTT), then it's sent, not automatically. Please"
 **Status:** saved first (read as: the reply recorder copies TTT's record/send interface (repo TTT, folder TTT_MINI: its record key, level, timer, SEND); nothing is sent until he presses SEND; on an error the take is kept, like TTT, and goes out when he presses SEND again, never by itself.)
+- 13.11.2026. Marko: "please don't transcribe Croatian, only English. That's it. I'm speaking in English only. I'm sending messages to friends in Croatian. That's all. English only everywhere". **Status: v19.** The reply transcription sends language=en to Groq whisper-large-v3 always; no auto-detect.
