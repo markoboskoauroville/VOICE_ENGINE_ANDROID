@@ -34,3 +34,9 @@ Marko: "voice engine is not good. It doesn't stop. Please don't automatically re
 Marko: "please copy the user interface of my TTT for recording and sending. Simply, I will send when I press Send. If there is an error (like in TTT), then it's sent, not automatically. Please"
 **Status:** saved first (read as: the reply recorder copies TTT's record/send interface (repo TTT, folder TTT_MINI: its record key, level, timer, SEND); nothing is sent until he presses SEND; on an error the take is kept, like TTT, and goes out when he presses SEND again, never by itself.)
 - 13.11.2026. Marko: "please don't transcribe Croatian, only English. That's it. I'm speaking in English only. I'm sending messages to friends in Croatian. That's all. English only everywhere". **Status: v19.** The reply transcription sends language=en to Groq whisper-large-v3 always; no auto-detect.
+
+## 13.11.2026: the phones' voice sounds different from the Mac
+
+> We just send a command and then the local voice engine is talking in my phone. In both of my phones ... they have different voice sound than this Mac ... The Beatrice sounds here beautiful, but on the phone something is wrong with audio settings. What is wrong?
+
+**Status:** saved first (13.11.2026). Plan: ask Speechify exactly what the Mac asks (simba-3.2 first), play as media/speech with no processing; measured difference in LESSONS.md.
