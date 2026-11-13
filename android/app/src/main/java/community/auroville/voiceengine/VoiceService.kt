@@ -516,7 +516,7 @@ class VoiceService : Service() {
                     200 to JSONObject().put("ok", true).put("voice", voice).put("subtitles", conf.subtitles)
                 }
             }
-            post && path == "/lock" -> { onMain { lock.on(j.optString("text", "Working on the phone. It will be yours again when this disappears.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
+            post && path == "/lock" -> { onMain { lock.on(j.optString("text", "Working on the phone. It will be yours again when this disappears."), j.optInt("seconds", 0)) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/request" -> { onMain { lock.request(j.optString("text", "Claude needs the phone for a moment.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/unlock" -> { onMain { lock.off() }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/through" -> { onMain { lock.through(j.optLong("ms", 800L)) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }

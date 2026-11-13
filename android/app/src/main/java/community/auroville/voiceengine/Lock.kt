@@ -40,6 +40,29 @@ class Lock(private val ctx: Context) {
     private fun dp(v: Int) = (v * ctx.resources.displayMetrics.density).toInt()
 
     private var bar: LinearLayout? = null
+    // v13: the countdown (Marko, 13.11.2026: "estimated time to finish, how much I need to wait, counting down")
+    private var endAt = 0L
+    private var label = ""
+    private val tick = object : Runnable {
+        override fun run() {
+            val d = detail ?: return
+            d.text = barText()
+            main.postDelayed(this, 1000)
+        }
+    }
+
+    private fun barText(): String {
+        if (endAt <= 0L) return "CLAUDE · $label"
+        val left = ((endAt - System.currentTimeMillis()) / 1000).toInt()
+        val t = if (left > 0) String.format("%d:%02d left", left / 60, left % 60) else "almost done"
+        return "CLAUDE · $label · $t"
+    }
+
+    /** /lock with seconds: the time left starts again from there. */
+    fun on(text: String, seconds: Int) {
+        endAt = if (seconds > 0) System.currentTimeMillis() + seconds * 1000L else 0L
+        on(text)
+    }
 
     /**
      * v12 (Marko, 13.11.2026: "very rude ... in the middle of the screen ... I cannot see what you are doing. Please put
@@ -52,7 +75,8 @@ class Lock(private val ctx: Context) {
     fun on(text: String) {
         lastText = text
         closeBlob()
-        if (state == "on" && detail != null) { detail?.text = "CLAUDE · $text"; root?.visibility = View.VISIBLE; return }
+        label = text
+        if (state == "on" && detail != null) { detail?.text = barText(); root?.visibility = View.VISIBLE; return }
         if (!Settings.canDrawOverlays(ctx)) return
         close()
         val orange = Color.parseColor("#E8A33D")
@@ -69,6 +93,7 @@ class Lock(private val ctx: Context) {
         // The bar: text left, a gap for the camera hole in the middle, the button right.
         val d = TextView(ctx).apply {
             this.text = "CLAUDE · $text"; textSize = 13f; setTextColor(orange); typeface = Typeface.DEFAULT_BOLD
+            fontFeatureSettings = "tnum"
             maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; gravity = Gravity.CENTER_VERTICAL or Gravity.START
         }
         val take = TextView(ctx).apply {
@@ -106,6 +131,8 @@ class Lock(private val ctx: Context) {
             v.onApplyWindowInsets(ins)
         }
         bar = b; detail = d; state = "on"
+        d.text = barText()
+        main.removeCallbacks(tick); main.post(tick)
     }
 
     /** The caller's own tap or screenshot: the lock steps aside for [ms] and comes back (unless it was lifted). */
@@ -175,6 +202,7 @@ class Lock(private val ctx: Context) {
     }
 
     private fun close() {
+        main.removeCallbacks(tick)
         back?.let { main.removeCallbacks(it) }; back = null
         root?.let { try { wm.removeView(it) } catch (e: Exception) { } }
         bar?.let { try { wm.removeView(it) } catch (e: Exception) { } }
