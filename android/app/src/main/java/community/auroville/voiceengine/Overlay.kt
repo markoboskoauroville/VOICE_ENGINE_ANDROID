@@ -23,19 +23,22 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.abs
 
+/** What the keys under the subtitle do (the Mac's v42 rows: PREVIOUS PAUSE NEXT SKIP / SLOWER SPEED FASTER / HIDE STOP). */
+class SubActions(
+    val pause: () -> Unit, val hide: () -> Unit, val stop: () -> Unit,
+    val prev: () -> Unit, val next: () -> Unit, val skip: () -> Unit,
+    val slower: () -> Unit, val faster: () -> Unit,
+    val dragged: (Double) -> Unit,
+)
+
 /**
- * The subtitle on the screen, above every app (the Mac's ScreenSub, one screen here): a band across the whole width,
- * the words being spoken centred and wrapped like a film's subtitle, never cut short, the word being said lit in its
- * own colour. On the right HIDE (the subtitle goes, the voice reads on) and STOP (the reading ends), as on the Mac since
- * v29. A drag moves the band up or down only, kept as `ypos` (the Mac's v18); a tap never hides it.
+ * The subtitle on the screen, above every app (the Mac's ScreenSub, v43, adapted to a portrait phone): at most four
+ * words at a time, centred in a column of about 76 % of the width (the phone is narrow), the word being said lit, and
+ * three centred rows of keys under the text: previous / pause / next sentence / skip the reading, then slower / speed /
+ * faster, then HIDE / STOP. Text and keys have the same hard black shadow. Everything stands inside the system bars and
+ * the camera cutout with 16 dp of margin on every side. A drag moves it up or down only, kept as `ypos`.
  */
-class SubtitleOverlay(
-    private val ctx: Context,
-    private val onPause: () -> Unit,
-    private val onHide: () -> Unit,
-    private val onStop: () -> Unit,
-    private val onDragged: (Double) -> Unit,
-) {
+class SubtitleOverlay(private val ctx: Context, private val act: SubActions) {
     private val wm = ctx.getSystemService(WindowManager::class.java)
     private val density = ctx.resources.displayMetrics.density
     private var band: LinearLayout? = null
@@ -44,15 +47,24 @@ class SubtitleOverlay(
     private var conf = SubSettings()
     private var dragging = false
     private var pauseKey: KeyIcon? = null
+    private var speedLabel: TextView? = null
+    private var rate = 1.0
 
     /** PAUSE reads CONTINUE (a play triangle) while the voice waits (SPEC.md section 3). */
     fun setPaused(p: Boolean) { pauseKey?.setPaused(p) }
+
+    fun setRate(r: Double) { rate = r; speedLabel?.text = String.format(java.util.Locale.US, "%.1fx", r) }
 
     val shown: Boolean get() = band != null
 
     fun canDraw(): Boolean = Settings.canDrawOverlays(ctx)
 
     private fun dp(v: Float) = (v * density).toInt()
+
+    private fun shadowed(t: TextView, px: Float) {
+        val off = maxOf(2f, Math.round(px * 0.07f).toFloat())
+        t.setShadowLayer(0.01f, off, off, Color.BLACK)
+    }
 
     /** Opens the band (if allowed); false when Android does not let this app draw over others. */
     @SuppressLint("ClickableViewAccessibility")
@@ -63,32 +75,39 @@ class SubtitleOverlay(
         val text = TextView(ctx).apply {
             gravity = Gravity.CENTER
             setLineSpacing(0f, 1.06f)
-            setPadding(dp(14f), dp(8f), dp(6f), dp(8f))
+            setPadding(dp(12f), dp(10f), dp(12f), dp(4f))
             includeFontPadding = true
         }
-        val keys = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
-        val k = dp(46f)
-        pauseKey = KeyIcon(ctx, KeyIcon.PAUSE) { onPause() }
-        keys.addView(pauseKey, LinearLayout.LayoutParams(k, k))
-        keys.addView(KeyIcon(ctx, KeyIcon.HIDE) { onHide() }, LinearLayout.LayoutParams(k, k))
-        keys.addView(KeyIcon(ctx, KeyIcon.STOP) { onStop() }, LinearLayout.LayoutParams(k, k))
-        val b = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(96f)
+        val k = dp(44f)
+        fun row(vararg v: View): LinearLayout = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
+            for (x in v) addView(x, LinearLayout.LayoutParams(if (x is KeyIcon) k else dp(64f), k))
         }
-        b.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        b.addView(keys, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(8f) })
+        pauseKey = KeyIcon(ctx, KeyIcon.PAUSE) { act.pause() }
+        val sp = TextView(ctx).apply {
+            gravity = Gravity.CENTER; setTextColor(Color.argb(240, 240, 240, 240)); contentDescription = "Speed"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); typeface = Typeface.DEFAULT_BOLD
+            text = String.format(java.util.Locale.US, "%.1fx", rate)
+        }
+        shadowed(sp, dp(15f).toFloat())
+        speedLabel = sp
+        val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+        col.addView(text, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        col.addView(row(KeyIcon(ctx, KeyIcon.PREV) { act.prev() }, pauseKey!!, KeyIcon(ctx, KeyIcon.NEXT) { act.next() }, KeyIcon(ctx, KeyIcon.SKIP) { act.skip() }))
+        col.addView(row(KeyIcon(ctx, KeyIcon.MINUS) { act.slower() }, sp, KeyIcon(ctx, KeyIcon.PLUS) { act.faster() }))
+        col.addView(row(KeyIcon(ctx, KeyIcon.HIDE) { act.hide() }, KeyIcon(ctx, KeyIcon.STOP) { act.stop() }))
+        col.setPadding(dp(8f), dp(4f), dp(8f), dp(10f))
 
+        val s0 = screen()
         val p = WindowManager.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            columnWidth(s0), ViewGroup.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         )
-        p.gravity = Gravity.TOP or Gravity.START
-        p.y = screen().top
+        p.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        p.y = s0.top + dp(MARGIN)
         p.title = "Voice Engine subtitle"
 
         // a drag moves it up or down; the place is kept when the finger lifts
@@ -112,23 +131,23 @@ class SubtitleOverlay(
                     if (moved) {
                         val s = screen()
                         val h = band?.height ?: 0
-                        onDragged(((s.height - (lp.y + h / 2.0)) / s.height).coerceIn(0.0, 1.0))
+                        act.dragged(((s.height - (lp.y + h / 2.0)) / s.height).coerceIn(0.0, 1.0))
                     }
                 }
             }
             true
         }
         text.setOnTouchListener(drag)
-        b.setOnTouchListener(drag)
-        b.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+        col.setOnTouchListener(drag)
+        col.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
             if (bottom - top != oldBottom - oldTop) place()
         }
-        band = b; tv = text; params = p
+        band = col; tv = text; params = p
         restyle(c)
         try {
-            wm.addView(b, p)
+            wm.addView(col, p)
         } catch (e: RuntimeException) {          // the permission went away between the check and now
-            band = null; tv = null; params = null
+            band = null; tv = null; params = null; speedLabel = null; pauseKey = null
             return false
         }
         return true
@@ -136,7 +155,7 @@ class SubtitleOverlay(
 
     fun close() {
         val b = band ?: return
-        band = null; tv = null; params = null; dragging = false
+        band = null; tv = null; params = null; dragging = false; speedLabel = null; pauseKey = null
         try { wm.removeView(b) } catch (e: IllegalArgumentException) { }
     }
 
@@ -149,17 +168,15 @@ class SubtitleOverlay(
         b.setBackgroundColor(Color.argb(a, g, g, g))
         val px = (screen().height * c.size / 100.0).toFloat().coerceAtLeast(dp(12f).toFloat())
         t.setTextSize(TypedValue.COMPLEX_UNIT_PX, px)
-        // The Mac's v37 hard shadow (Marko, 8.11.2026; on the phone 13.11.2026: "All of my voice engine should be
-        // synced"): solid black, no blur, down and right by 7 % of the letter size, at least 2 px. Android draws no
-        // shadow at radius 0, so the radius is the smallest it accepts, which still looks hard.
-        val off = maxOf(2f, Math.round(px * 0.07f).toFloat())
-        t.setShadowLayer(0.01f, off, off, Color.BLACK)
+        // The Mac's v37 hard shadow (Marko, 8.11.2026; on the phone 13.11.2026): solid black, no blur, down and right by
+        // 7 % of the letter size, at least 2 px. The keys carry the same (v43: "exactly the same for the controls").
+        shadowed(t, px)
         t.typeface = if (c.bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         t.setTextColor(SubSettings.colourOr(c.colour, Color.parseColor("#E8A33D")))
         if (!dragging) place()
     }
 
-    /** These words, the word [hs, he) lit (hs < 0: none lit). */
+    /** These words, the word [hs, he) lit (hs < 0: none lit). The spoken word is lit by a plain colour change. */
     fun show(text: String, hs: Int, he: Int) {
         val t = tv ?: return
         val sp = SpannableString(text)
@@ -173,18 +190,24 @@ class SubtitleOverlay(
         t.text = sp
     }
 
-    data class Screen(val height: Int, val top: Int, val bottom: Int)
+    companion object { const val MARGIN = 16f; const val COLUMN = 0.76 }
+
+    data class Screen(val height: Int, val width: Int, val top: Int, val bottom: Int, val left: Int, val right: Int)
 
     private fun screen(): Screen {
         val m = wm.currentWindowMetrics
         val ins = m.windowInsets.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-        return Screen(m.bounds.height(), ins.top, ins.bottom)
+        return Screen(m.bounds.height(), m.bounds.width(), ins.top, ins.bottom, ins.left, ins.right)
     }
+
+    /** About 76 % of the width, never wider than what is left inside the bars and the cutout less the margin each side. */
+    private fun columnWidth(s: Screen): Int =
+        minOf((s.width * COLUMN).toInt(), s.width - maxOf(s.left, s.right) * 2 - dp(MARGIN) * 2)
 
     private fun clampY(y: Int, h: Int): Int {
         val s = screen()
-        val lo = s.top
-        val hi = (s.height - s.bottom - h).coerceAtLeast(lo)
+        val lo = s.top + dp(MARGIN)
+        val hi = (s.height - s.bottom - dp(MARGIN) - h).coerceAtLeast(lo)
         return y.coerceIn(lo, hi)
     }
 
@@ -201,60 +224,92 @@ class SubtitleOverlay(
             else -> (s.height - h) / 2
         }
         val c = clampY(y, h)
-        if (c != lp.y) {
-            lp.y = c
-            try { wm.updateViewLayout(b, lp) } catch (e: IllegalArgumentException) { }
-        }
+        val w = columnWidth(s)
+        var changed = false
+        if (c != lp.y) { lp.y = c; changed = true }
+        if (w != lp.width) { lp.width = w; changed = true }
+        if (changed) try { wm.updateViewLayout(b, lp) } catch (e: IllegalArgumentException) { }
     }
 }
 
-/** PAUSE (two bars, a triangle while paused), HIDE (a caption bubble crossed out) and STOP (a square), drawn, as the Mac's SF Symbols. */
+/** The keys, drawn (the Mac's SF Symbols): each shape twice, first in hard black shifted down-right, then in light. */
 class KeyIcon(ctx: Context, private val kind: Int, private val action: () -> Unit) : View(ctx) {
     companion object {
         const val HIDE = 0
         const val STOP = 1
         const val PAUSE = 2
+        const val PREV = 3
+        const val NEXT = 4
+        const val SKIP = 5
+        const val MINUS = 6
+        const val PLUS = 7
     }
 
     private var paused = false
     fun setPaused(p: Boolean) { if (p == paused) return; paused = p; contentDescription = if (p) "Continue" else "Pause"; invalidate() }
 
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(235, 235, 235, 235); strokeCap = Paint.Cap.ROUND }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
 
     init {
         isClickable = true
         isFocusable = false
-        contentDescription = when (kind) { HIDE -> "Hide"; PAUSE -> "Pause"; else -> "Stop" }
+        contentDescription = when (kind) {
+            HIDE -> "Hide"; PAUSE -> "Pause"; PREV -> "Previous sentence"; NEXT -> "Next sentence"
+            SKIP -> "Skip to the next reading"; MINUS -> "Slower"; PLUS -> "Faster"; else -> "Stop"
+        }
         setOnClickListener { action() }
     }
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         val s = minOf(width, height) * 0.5f
+        val off = maxOf(2f, Math.round(s * 0.14f).toFloat())
+        c.save(); c.translate(off, off); paint.color = Color.BLACK; shape(c, s); c.restore()
+        paint.color = Color.argb(240, 240, 240, 240); shape(c, s)
+    }
+
+    private fun tri(c: Canvas, x0: Float, x1: Float, cy: Float, h: Float) {
+        val p = android.graphics.Path().apply { moveTo(x0, cy - h); lineTo(x1, cy); lineTo(x0, cy + h); close() }
+        c.drawPath(p, paint)
+    }
+
+    private fun shape(c: Canvas, s: Float) {
         val cx = width / 2f
         val cy = height / 2f
-        if (kind == PAUSE) {
-            paint.style = Paint.Style.FILL
-            if (paused) {
-                val p = android.graphics.Path().apply { moveTo(cx - s * 0.32f, cy - s * 0.46f); lineTo(cx + s * 0.5f, cy); lineTo(cx - s * 0.32f, cy + s * 0.46f); close() }
-                c.drawPath(p, paint)
-            } else {
+        paint.style = Paint.Style.FILL
+        when (kind) {
+            PAUSE -> if (paused) tri(c, cx - s * 0.32f, cx + s * 0.5f, cy, s * 0.46f) else {
                 c.drawRoundRect(cx - s * 0.42f, cy - s * 0.42f, cx - s * 0.1f, cy + s * 0.42f, s * 0.06f, s * 0.06f, paint)
                 c.drawRoundRect(cx + s * 0.1f, cy - s * 0.42f, cx + s * 0.42f, cy + s * 0.42f, s * 0.06f, s * 0.06f, paint)
             }
-            return
+            STOP -> c.drawRoundRect(cx - s * 0.42f, cy - s * 0.42f, cx + s * 0.42f, cy + s * 0.42f, s * 0.08f, s * 0.08f, paint)
+            NEXT -> {   // forward.end.fill: a triangle, then a bar
+                tri(c, cx - s * 0.5f, cx + s * 0.28f, cy, s * 0.42f)
+                c.drawRoundRect(cx + s * 0.3f, cy - s * 0.42f, cx + s * 0.5f, cy + s * 0.42f, s * 0.05f, s * 0.05f, paint)
+            }
+            PREV -> {   // backward.end.fill
+                tri(c, cx + s * 0.5f, cx - s * 0.28f, cy, s * 0.42f)
+                c.drawRoundRect(cx - s * 0.5f, cy - s * 0.42f, cx - s * 0.3f, cy + s * 0.42f, s * 0.05f, s * 0.05f, paint)
+            }
+            SKIP -> {   // forward.fill: two triangles
+                tri(c, cx - s * 0.55f, cx, cy, s * 0.42f)
+                tri(c, cx, cx + s * 0.55f, cy, s * 0.42f)
+            }
+            MINUS, PLUS -> {
+                paint.style = Paint.Style.STROKE; paint.strokeWidth = s * 0.14f
+                c.drawCircle(cx, cy, s * 0.62f, paint)
+                c.drawLine(cx - s * 0.3f, cy, cx + s * 0.3f, cy, paint)
+                if (kind == PLUS) c.drawLine(cx, cy - s * 0.3f, cx, cy + s * 0.3f, paint)
+            }
+            else -> {   // HIDE: a caption bubble crossed out
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = s * 0.11f
+                c.drawRoundRect(cx - s * 0.62f, cy - s * 0.44f, cx + s * 0.62f, cy + s * 0.44f, s * 0.16f, s * 0.16f, paint)
+                c.drawLine(cx - s * 0.36f, cy - s * 0.08f, cx + s * 0.08f, cy - s * 0.08f, paint)
+                c.drawLine(cx - s * 0.36f, cy + s * 0.18f, cx + s * 0.36f, cy + s * 0.18f, paint)
+                paint.strokeWidth = s * 0.13f
+                c.drawLine(cx - s * 0.72f, cy + s * 0.66f, cx + s * 0.72f, cy - s * 0.66f, paint)
+            }
         }
-        if (kind == STOP) {
-            paint.style = Paint.Style.FILL
-            c.drawRoundRect(cx - s * 0.42f, cy - s * 0.42f, cx + s * 0.42f, cy + s * 0.42f, s * 0.08f, s * 0.08f, paint)
-            return
-        }
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = s * 0.11f
-        c.drawRoundRect(cx - s * 0.62f, cy - s * 0.44f, cx + s * 0.62f, cy + s * 0.44f, s * 0.16f, s * 0.16f, paint)
-        c.drawLine(cx - s * 0.36f, cy - s * 0.08f, cx + s * 0.08f, cy - s * 0.08f, paint)
-        c.drawLine(cx - s * 0.36f, cy + s * 0.18f, cx + s * 0.36f, cy + s * 0.18f, paint)
-        paint.strokeWidth = s * 0.13f
-        c.drawLine(cx - s * 0.72f, cy + s * 0.66f, cx + s * 0.72f, cy - s * 0.66f, paint)
     }
 }

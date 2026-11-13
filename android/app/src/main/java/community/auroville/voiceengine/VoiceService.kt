@@ -79,6 +79,23 @@ class VoiceService : Service() {
     private var text = ""
     private var words: List<Word> = emptyList()
     private var pieces: List<Piece> = emptyList()
+    /** v22: what is on the screen one at a time: chunks of at most four words (Chunks), or sentences while no timings exist. */
+    private class Seg(val start: Int, val end: Int, val a: Int, val b: Int)
+    private var segs: List<Seg> = emptyList()
+    private var segOfWord = IntArray(0)
+    private fun rebuildSegs() {
+        if (words.isNotEmpty()) {
+            val ch = Chunks.make(text, words)
+            segs = ch.map { Seg(words[it[0]].s, words[it[1]].e, it[0], it[1]) }
+            segOfWord = IntArray(words.size)
+            for ((i, c) in ch.withIndex()) for (w in c[0]..c[1]) segOfWord[w] = i
+        } else {
+            segs = pieces.map { Seg(it.start, it.end, -1, -1) }
+            segOfWord = IntArray(0)
+        }
+    }
+    @Volatile var rate = 1.0
+        private set
     @Volatile private var reading = false
     @Volatile private var paused = false
     private val clock = Clock()
@@ -104,7 +121,11 @@ class VoiceService : Service() {
         instance = this
         conf = SubSettings.load(this)
         rotation.start()
-        overlay = SubtitleOverlay(this, { pausePressed() }, { hidePressed() }, { stopPressed() }, { y -> dragged(y) })
+        overlay = SubtitleOverlay(this, SubActions(
+            pause = { pausePressed() }, hide = { hidePressed() }, stop = { stopPressed() },
+            prev = { prevSentence() }, next = { nextSentence() }, skip = { skipReading() },
+            slower = { nudgeRate(-0.1) }, faster = { nudgeRate(0.1) }, dragged = { y -> dragged(y) }))
+        rate = getSharedPreferences("engine", Context.MODE_PRIVATE).getFloat("rate", 1.0f).toDouble().coerceIn(0.8, 1.6)
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Voice Engine", NotificationManager.IMPORTANCE_LOW).apply {
             setShowBadge(false)
@@ -163,6 +184,8 @@ class VoiceService : Service() {
         val dur = j.optDouble("dur", 0.0)
         if (words.isEmpty() && dur > 0) words = Reading.estimate(t, dur)
         pieces = Reading.pieces(t)
+        rebuildSegs()
+        overlay.setRate(rate)
         reading = true
         paused = false
         clock.reset()
@@ -170,7 +193,7 @@ class VoiceService : Service() {
         dismissed = false
         shownPiece = -2
         lit = -2
-        nowText = pieces.firstOrNull()?.let { text.substring(it.start, it.end) } ?: t
+        nowText = segs.firstOrNull()?.let { text.substring(it.start, it.end) } ?: t
         overlay.close()
         notifyNow()
         main.removeCallbacks(tick)
@@ -180,6 +203,12 @@ class VoiceService : Service() {
     // v3: the engine's own player (phonesay, 10.11.2026), so no audio file ever opens in another app
     private var player: MediaPlayer? = null
     @Volatile var lastSayError = ""
+    @Volatile private var lastEndAt = 0L
+    private val GAP_MS = 600L
+    /** v22: readings waiting (being made by Speechify or waiting for the voice to be free), in the order they arrived. */
+    val queued = java.util.concurrent.atomic.AtomicInteger(0)
+    private val ticketSeq = java.util.concurrent.atomic.AtomicLong(0)
+    private val nextTicket = java.util.concurrent.atomic.AtomicLong(0)   // whose turn it is to play: Speechify works on all at once, they play in order
     // v7: the phone lock (Claude is using the phone), see Lock.kt
     val lock by lazy { Lock(this) }
     // v8: Auto-rotate stays off (RotationGuard)
@@ -204,6 +233,7 @@ class VoiceService : Service() {
         player = mp
         mp.setOnCompletionListener { stopPlayer() }
         mp.start()
+        if (rate != 1.0) applyRate()
         val job = object : Runnable {
             override fun run() {
                 val m = player ?: return
@@ -218,13 +248,19 @@ class VoiceService : Service() {
 
     /** Blocking: Speechify, then the v3 player and the subtitle. Used by POST /say and the window's test button. */
     @Volatile private var sayGen = 0
-    fun sayLocal(text: String, voice: String = Speechify.voice(this), id0: String = "", replyMsg: Boolean = false) {
+    fun sayLocal(text: String, voice: String = Speechify.voice(this), id0: String = "", replyMsg: Boolean = false, ticket: Long = -1) {
         val id = id0.ifBlank { "say-" + System.currentTimeMillis() }
         val gen = sayGen
         try {
             val sp = Speechify.speak(this, text, voice)
             if (gen != sayGen) return          // STOP was pressed while Speechify was still working: nothing plays
-            onMain { play(JSONObject().put("id", id).put("text", text).put("audio", sp.audioB64).put("words", sp.words)) }
+            // v22: a reading never cuts another: wait until the one playing is over, then the 0.6 s gap (the Mac's queue)
+            while (ticket >= 0 && gen == sayGen && nextTicket.get() != ticket) Thread.sleep(40)      // the order they came in
+            while (gen == sayGen && (player != null || reply.state == Reply.S.RECORDING || reply.state == Reply.S.TRANSCRIBING)) Thread.sleep(60)
+            val wait = GAP_MS - (SystemClock.elapsedRealtime() - lastEndAt)
+            if (wait > 0) Thread.sleep(wait)
+            if (gen != sayGen) return
+            onMain { if (player == null) play(JSONObject().put("id", id).put("text", text).put("audio", sp.audioB64).put("words", sp.words)) }
             lastSayError = ""
         } catch (e: Exception) {
             lastSayError = e.message ?: e.javaClass.simpleName
@@ -235,12 +271,13 @@ class VoiceService : Service() {
 
     /** v16: the reply (talking back, Reply.kt) and the queue that retries the unsent answers. */
     val reply by lazy { Reply(this) }
-    fun silence() { sayGen++; if (player != null) stopPlayer() else if (reading) pendingCmd.set("stop"); hidePressed() }
+    fun silence() { sayGen++; queued.set(0); if (player != null) stopPlayer() else if (reading) pendingCmd.set("stop"); hidePressed() }
 
     private fun stopPlayer() {
         playJob?.let { main.removeCallbacks(it) }; playJob = null
         val m = player ?: return
         player = null
+        lastEndAt = SystemClock.elapsedRealtime()
         try { m.stop() } catch (e: Exception) { }
         m.release()
         endReading(rid)
@@ -248,7 +285,7 @@ class VoiceService : Service() {
 
     private fun toggleLocal(): Boolean {
         val m = player ?: return false
-        if (m.isPlaying) { m.pause(); paused = true } else { m.start(); paused = false }
+        if (m.isPlaying) { m.pause(); paused = true } else { m.start(); applyRate(); paused = false }
         pendingCmd.set("")
         return true
     }
@@ -271,7 +308,7 @@ class VoiceService : Service() {
         val wasPaused = paused
         paused = j.optBoolean("paused", false)
         val dur = j.optDouble("dur", 0.0)
-        if (words.isEmpty() && dur > 0) words = Reading.estimate(text, dur)
+        if (words.isEmpty() && dur > 0) { words = Reading.estimate(text, dur); rebuildSegs() }
         if (!p.isNaN()) clock.sample(p, nowS(), paused)
         lastPos = SystemClock.elapsedRealtime()
         pauseSync.sync(paused, nowS())
@@ -305,10 +342,13 @@ class VoiceService : Service() {
         }
         val t = clock.at(nowS(), paused) + Reading.LEAD + conf.offset / 1000.0
         val k = if (clock.running) Reading.litAt(words, t) else -1
-        val pi = Reading.pieceOf(pieces, if (clock.running) Reading.placeAt(words, t, k, text.length) else 0)
+        // only the chunk holding the word being said (the first chunk before the first word, the last one stays at the end)
+        val pi = if (words.isNotEmpty() && segOfWord.size == words.size && segs.isNotEmpty()) {
+            if (k >= 0) segOfWord[k] else if (clock.running && t > words[0].t) segs.lastIndex else 0
+        } else Reading.pieceOf(pieces, if (clock.running) Reading.placeAt(words, t, k, text.length) else 0)
         if (pi != shownPiece || k != lit) {
-            if (pi != shownPiece && pi >= 0) {
-                nowText = text.substring(pieces[pi].start, pieces[pi].end)
+            if (pi != shownPiece && pi in segs.indices) {
+                nowText = text.substring(segs[pi].start, segs[pi].end)
                 if (shownPiece >= -1) notifyNow()
             }
             shownPiece = pi
@@ -318,8 +358,8 @@ class VoiceService : Service() {
     }
 
     private fun paintPiece(pi: Int, k: Int) {
-        if (pi < 0 || pi >= pieces.size) return
-        val p = pieces[pi]
+        if (pi < 0 || pi >= segs.size) return
+        val p = segs[pi]
         val sub = text.substring(p.start, p.end)
         var hs = -1
         var he = -1
@@ -342,11 +382,72 @@ class VoiceService : Service() {
 
     /** STOP: the reading ends completely (the talker hears it in its next /pos, within a fifth of a second). */
     fun stopPressed() {
+        queued.set(0)                 // STOP ends the queue too
         sayGen++                      // a voice still being fetched must not start afterwards ("It doesn't stop", 13.11.2026)
         if (player != null) stopPlayer()
         else if (reading) pendingCmd.set("stop")
         hidePressed()
         main.postDelayed({ if (reading) endReading(rid) }, 2500)
+    }
+
+    // ------------------------------------------------ v22: the Mac's controls (previous / next sentence, skip reading, speed)
+
+    private fun playing(): MediaPlayer? = player
+
+    /** Where the sentence [i] begins, in seconds of the clip: the start of its first word. */
+    private fun sentenceStart(i: Int): Double? {
+        val p = pieces.getOrNull(i) ?: return null
+        return words.firstOrNull { it.s >= p.start }?.t
+    }
+
+    private fun currentSentence(): Int {
+        val k = if (lit >= 0) lit else 0
+        val at = words.getOrNull(k)?.s ?: 0
+        return Reading.pieceOf(pieces, at)
+    }
+
+    private fun seekTo(sec: Double) {
+        val m = playing() ?: return
+        m.seekTo((sec * 1000).toInt().coerceAtLeast(0))
+        clock.sample(sec, nowS(), paused)
+    }
+
+    /** NEXT: the next sentence; on the last one, the next reading in the queue (as the Mac's /speak/next). */
+    fun nextSentence() {
+        if (!reading || player == null) return
+        val i = currentSentence()
+        val t = sentenceStart(i + 1)
+        if (t != null) seekTo(t) else skipReading()
+    }
+
+    /** PREVIOUS: the sentence before is said again. */
+    fun prevSentence() {
+        if (!reading || player == null) return
+        val i = currentSentence()
+        seekTo(sentenceStart(maxOf(0, i - 1)) ?: 0.0)
+    }
+
+    /** SKIP: the rest of this reading is dropped; the next reading in the queue follows after the 0.6 s gap. */
+    fun skipReading() {
+        if (player != null) stopPlayer()
+    }
+
+    /** SLOWER / FASTER and POST /say/rate: 0.8 to 1.6, pitch kept, remembered; the word timings follow because they run on the clip's own time. */
+    fun setRate(r: Double) {
+        rate = (Math.round(r.coerceIn(0.8, 1.6) * 10) / 10.0)
+        getSharedPreferences("engine", Context.MODE_PRIVATE).edit().putFloat("rate", rate.toFloat()).apply()
+        overlay.setRate(rate)
+        applyRate()
+    }
+    fun nudgeRate(d: Double) = setRate(rate + d)
+
+    private fun applyRate() {
+        val m = player ?: return
+        if (Build.VERSION.SDK_INT < 23) return
+        try {
+            // setPlaybackParams on a paused player can start it: only while it plays; resume applies it too
+            if (m.isPlaying) m.playbackParams = android.media.PlaybackParams().setSpeed(rate.toFloat()).setPitch(1f)
+        } catch (e: Exception) { }
     }
 
     private val pauseSync = PauseSync()
@@ -384,6 +485,7 @@ class VoiceService : Service() {
     /** A subtitle with no voice behind it, for [seconds] (the second word lit, so the word's colour shows too). */
     fun test(t: String, seconds: Double) {
         if (reading) return
+        overlay.setRate(rate)
         conf = SubSettings.load(this)
         lingerJob?.let { main.removeCallbacks(it) }; lingerJob = null
         testJob?.let { main.removeCallbacks(it) }; testJob = null
@@ -534,8 +636,17 @@ class VoiceService : Service() {
                     val voice = j.optString("voice", "").ifBlank { Speechify.voice(this) }
                     val wantsReply = j.optBoolean("reply", false)
                     if (wantsReply) onMain { reply.offer(targetOf(j)) }
-                    Thread { sayLocal(text, voice, j.optString("id", ""), wantsReply) }.start()
-                    200 to JSONObject().put("ok", true).put("voice", voice).put("subtitles", conf.subtitles).put("reply", wantsReply).put("spoken", Speechify.hasKey(this))
+                    val ticket = ticketSeq.getAndIncrement()
+                    queued.incrementAndGet()
+                    Thread {
+                        try { sayLocal(text, voice, j.optString("id", ""), wantsReply, ticket) }
+                        finally {
+                            while (nextTicket.get() != ticket) Thread.sleep(40)     // pass the turn on in order, also when this one was stopped
+                            nextTicket.incrementAndGet()
+                            if (queued.get() > 0) queued.decrementAndGet()
+                        }
+                    }.start()
+                    200 to JSONObject().put("ok", true).put("queued", queued.get()).put("voice", voice).put("subtitles", conf.subtitles).put("reply", wantsReply).put("spoken", Speechify.hasKey(this))
                 }
             }
             // v16: a message from a session with the REPLY button but no voice (tests, or when he reads it); POST /reply = the button pressed
@@ -552,6 +663,13 @@ class VoiceService : Service() {
                 val t = j.optString("text", "").ifBlank { "This is how the subtitle looks while I speak to you." }
                 onMain { test(t, j.optDouble("seconds", 8.0).coerceIn(1.0, 600.0)) }
                 200 to ok().put("overlay", overlay.canDraw())
+            }
+            post && (path == "/say/next" || path == "/next") -> { onMain { nextSentence() }; 200 to ok() }
+            post && (path == "/say/prev" || path == "/say/previous" || path == "/prev") -> { onMain { prevSentence() }; 200 to ok() }
+            post && (path == "/say/skip" || path == "/skip") -> { onMain { skipReading() }; 200 to ok().put("queued", maxOf(0, queued.get() - 1)) }
+            post && (path == "/say/rate" || path == "/rate") -> {
+                onMain { setRate(if (j.has("rate")) j.optDouble("rate", rate) else rate + j.optDouble("delta", 0.0)) }
+                200 to ok().put("rate", rate)
             }
             post && path == "/hide" -> { onMain { hidePressed() }; 200 to ok() }
             post && path == "/stop" -> { onMain { stopPressed() }; 200 to ok() }
@@ -573,7 +691,7 @@ class VoiceService : Service() {
     private fun status(): JSONObject {
         val v = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }
         return JSONObject().put("app", "voiceengine").put("version", v).put("port", port)
-            .put("reading", reading).put("paused", paused).put("subtitles", conf.subtitles)
+            .put("queue", queued.get()).put("rate", rate).put("reading", reading).put("paused", paused).put("subtitles", conf.subtitles)
             .put("shown", overlay.shown).put("overlay", overlay.canDraw()).put("text", if (reading) nowText else "")
             .put("lock", lock.state).put("speechify", Speechify.hasKey(this))
             .put("rotation_guard", if (rotation.allowed()) "on" else "needs permission").put("rotation_caught", rotation.caught).put("rotation_last", rotation.lastAt).put("key", Speechify.ringLabel(this)).put("voice", Speechify.voice(this)).put("model", Speechify.modelLabel(this)).put("say_error", lastSayError)
