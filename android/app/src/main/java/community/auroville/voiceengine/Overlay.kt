@@ -87,7 +87,7 @@ class SubtitleOverlay(private val ctx: Context, private val act: SubActions) {
         val sp = TextView(ctx).apply {
             gravity = Gravity.CENTER; setTextColor(Color.argb(240, 240, 240, 240)); contentDescription = "Speed"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); typeface = Typeface.DEFAULT_BOLD
-            text = String.format(java.util.Locale.US, "%.1fx", rate)
+            this.text = String.format(java.util.Locale.US, "%.1fx", rate)
         }
         shadowed(sp, dp(15f).toFloat())
         speedLabel = sp
