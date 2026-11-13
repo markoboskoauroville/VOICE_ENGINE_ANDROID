@@ -62,3 +62,11 @@ Marko refines (13.11.2026, relayed): "Any application using Speechify ... It nee
 > Please update voice engine subtitles. I want to be able to drag them on the screen up and down only, not to the side, and they remember its last position and they keep it there. Very simple request from me, thank you.
 
 **Status:** saved first (13.11.2026). v23: the whole block (text and the three rows of keys) drags vertically only, x stays centred, clamped inside bars/cutout with 16 dp margins; a drag that begins on a key is a drag only after 10 dp of movement (the key is cancelled), a plain tap still presses; the place is saved (`ypos`) and used for every following subtitle.
+
+## 13.11.2026: the Mac is the server for the phones (v24), and the voice yields to TTT
+
+> Since phone is not strong enough to run this kind of models, then you need to build API interface for this models so my Mac itself becomes server for talking and server for everything. So my phones can use the services from my Mac. Over Tailscale, we are all connected.
+
+> we need to make connection between TTT and this voice engine because when I'm typing, I'm talking to my keyboard, voice engine is talking over me ... What is happening with TTT right now, it plays the pause in the system to all players. So we can use that ... Look at the TTT code, what is happening, what signal it says when I press record, and what TTT does when I send the transcription. It releases the player. So the player is our voice also can be acting as a player. So nothing needs to be built inside TTT. Only voice needs to be ... act as a player ... need to wait until I finish dictation. If I start dictation, then you need to stop.
+
+**Status:** saved first (13.11.2026). v24 in progress.

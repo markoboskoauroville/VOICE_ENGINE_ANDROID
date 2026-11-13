@@ -201,6 +201,10 @@ class MainActivity : Activity() {
         } else box.addView(label("AUTO-ROTATE: KEPT OFF (caught ${VoiceService.instance?.rotation?.caught ?: 0} times)", 12f, dim, 6))
 
         // v4 (13.11.2026): the voice is Speechify, spoken here; other computers send text only.
+        box.addView(label("ENGINE (v24)"))
+        box.addView(label(MacServer.label(this), 12f, dim, 4))
+        box.addView(row(word("MAC (FREE)", MacServer.enabled(this)) { MacServer.setEngine(this, "mac"); build() },
+            word("SPEECHIFY (OWN KEY)", !MacServer.enabled(this)) { MacServer.setEngine(this, "speechify"); build() }))
         box.addView(label("VOICE (SPEECHIFY)"))
         box.addView(label(if (Speechify.hasKey(this)) "KEYS: ${Speechify.keys(this).size} · SPEAKING ON ${Speechify.ringLabel(this)} · VOICE ${Speechify.voice(this).uppercase()}" else "KEY: NONE YET · PICK THE FILE WITH YOUR SPEECHIFY KEY", 12f, dim, 4))
         box.addView(row(word("PICK KEY FILE", false) {

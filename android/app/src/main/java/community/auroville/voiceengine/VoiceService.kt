@@ -219,6 +219,7 @@ class VoiceService : Service() {
         val a = j.optString("audio", "")
         if (a.isEmpty() || j.optString("text", "").isBlank()) return false
         stopPlayer()
+        if (!takeFocus(j)) return true          // v24: another player (TTT recording) has the floor: held, plays when it lets go
         val f = java.io.File(cacheDir, "play.mp3")
         try { f.writeBytes(Base64.decode(a, Base64.DEFAULT)) } catch (e: Exception) { return false }
         val mp = MediaPlayer()
@@ -233,6 +234,7 @@ class VoiceService : Service() {
         player = mp
         mp.setOnCompletionListener { stopPlayer() }
         mp.start()
+        mediaSession(true, true)
         if (rate != 1.0) applyRate()
         val job = object : Runnable {
             override fun run() {
@@ -252,11 +254,11 @@ class VoiceService : Service() {
         val id = id0.ifBlank { "say-" + System.currentTimeMillis() }
         val gen = sayGen
         try {
-            val sp = Speechify.speak(this, text, voice)
+            val sp = MacServer.speak(this, text, voice)
             if (gen != sayGen) return          // STOP was pressed while Speechify was still working: nothing plays
             // v22: a reading never cuts another: wait until the one playing is over, then the 0.6 s gap (the Mac's queue)
             while (ticket >= 0 && gen == sayGen && nextTicket.get() != ticket) Thread.sleep(40)      // the order they came in
-            while (gen == sayGen && (player != null || reply.state == Reply.S.RECORDING || reply.state == Reply.S.TRANSCRIBING)) Thread.sleep(60)
+            while (gen == sayGen && (player != null || pendingPlay != null || reply.state == Reply.S.RECORDING || reply.state == Reply.S.TRANSCRIBING)) Thread.sleep(60)
             val wait = GAP_MS - (SystemClock.elapsedRealtime() - lastEndAt)
             if (wait > 0) Thread.sleep(wait)
             if (gen != sayGen) return
@@ -271,13 +273,78 @@ class VoiceService : Service() {
 
     /** v16: the reply (talking back, Reply.kt) and the queue that retries the unsent answers. */
     val reply by lazy { Reply(this) }
-    fun silence() { sayGen++; queued.set(0); if (player != null) stopPlayer() else if (reading) pendingCmd.set("stop"); hidePressed() }
+    fun silence() { pendingPlay = null; sayGen++; queued.set(0); if (player != null) stopPlayer() else if (reading) pendingCmd.set("stop"); hidePressed() }
+
+    // ---------------------------------------------------------------- v24: the voice is a proper player (Marko, 13.11.2026)
+    // TTT asks for AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE when he presses record and abandons it when the dictation is sent.
+    // The voice holds focus while it speaks: LOSS_* = pause at this word and hold; GAIN = go on from the same place. A reading
+    // that arrives while another player has the floor waits (delayed focus) and starts when it is given back. Mirror of the
+    // Mac's MicGuard. A media session lets a system pause/play key reach it too. Nothing in TTT changes.
+    @Volatile var yielded = false                  // paused by the focus system (not by his button)
+    @Volatile var pendingPlay: JSONObject? = null  // waiting for focus
+    @Volatile var focusLosses = 0
+    private var focusReq: android.media.AudioFocusRequest? = null
+    private var session: android.media.session.MediaSession? = null
+    private val audioMgr by lazy { getSystemService(AUDIO_SERVICE) as android.media.AudioManager }
+
+    private val focusListener = android.media.AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            android.media.AudioManager.AUDIOFOCUS_LOSS, android.media.AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                focusLosses++
+                val m = player
+                if (m != null && m.isPlaying) { m.pause(); paused = true; yielded = true; pendingCmd.set(""); notifyNow() }
+                else if (m != null) yielded = true
+            }
+            android.media.AudioManager.AUDIOFOCUS_GAIN -> {
+                val pj = pendingPlay
+                if (pj != null) { pendingPlay = null; main.post { play(pj) } }
+                else {
+                    val m = player
+                    if (yielded && m != null) { yielded = false; m.start(); applyRate(); paused = false; notifyNow() }
+                    yielded = false
+                }
+            }
+        }
+    }
+
+    /** True when the voice has the floor now; false when it is held (delayed) and [j] will play on GAIN. */
+    private fun takeFocus(j: JSONObject): Boolean {
+        val req = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .setAcceptsDelayedFocusGain(true).setOnAudioFocusChangeListener(focusListener, main).build()
+        focusReq = req
+        return when (audioMgr.requestAudioFocus(req)) {
+            android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED -> true
+            android.media.AudioManager.AUDIOFOCUS_REQUEST_DELAYED -> { pendingPlay = j; true.not() }
+            else -> { pendingPlay = j; false }
+        }
+    }
+
+    private fun giveFocus() { focusReq?.let { runCatching { audioMgr.abandonAudioFocusRequest(it) } }; focusReq = null }
+
+    private fun mediaSession(active: Boolean, playing: Boolean) {
+        runCatching {
+            val ms = session ?: android.media.session.MediaSession(this, "VoiceEngine").also { n ->
+                n.setCallback(object : android.media.session.MediaSession.Callback() {
+                    override fun onPause() { main.post { player?.let { if (it.isPlaying) toggleLocal() } } }
+                    override fun onPlay() { main.post { player?.let { if (!it.isPlaying) toggleLocal() } } }
+                    override fun onStop() { main.post { silence() } }
+                })
+                session = n
+            }
+            ms.setPlaybackState(android.media.session.PlaybackState.Builder()
+                .setActions(android.media.session.PlaybackState.ACTION_PLAY or android.media.session.PlaybackState.ACTION_PAUSE or android.media.session.PlaybackState.ACTION_PLAY_PAUSE or android.media.session.PlaybackState.ACTION_STOP)
+                .setState(if (playing) android.media.session.PlaybackState.STATE_PLAYING else android.media.session.PlaybackState.STATE_PAUSED, 0, 1f).build())
+            ms.isActive = active
+        }
+    }
 
     private fun stopPlayer() {
         playJob?.let { main.removeCallbacks(it) }; playJob = null
         val m = player ?: return
         player = null
         lastEndAt = SystemClock.elapsedRealtime()
+        yielded = false; giveFocus(); mediaSession(false, false)
         try { m.stop() } catch (e: Exception) { }
         m.release()
         endReading(rid)
@@ -631,7 +698,7 @@ class VoiceService : Service() {
             post && path == "/say" -> {
                 val text = j.optString("text", "").trim()
                 if (text.isEmpty()) 400 to JSONObject().put("ok", false).put("error", "no text")
-                else if (!Speechify.hasKey(this) && !j.optBoolean("reply", false)) 409 to JSONObject().put("ok", false).put("error", "no Speechify key: pick the key file in Voice Engine")
+                else if (!Speechify.hasKey(this) && !MacServer.enabled(this) && !j.optBoolean("reply", false)) 409 to JSONObject().put("ok", false).put("error", "no Speechify key: pick the key file in Voice Engine")
                 else {
                     val voice = j.optString("voice", "").ifBlank { Speechify.voice(this) }
                     val wantsReply = j.optBoolean("reply", false)
@@ -652,6 +719,11 @@ class VoiceService : Service() {
             // v16: a message from a session with the REPLY button but no voice (tests, or when he reads it); POST /reply = the button pressed
             post && path == "/offer" -> { onMain { val t = j.optString("text", "").trim(); if (t.isNotEmpty()) test(t, 20.0); reply.offer(targetOf(j)) }; 200 to ok().put("reply", reply.state.name) }
             post && path == "/reply" -> { onMain { reply.press() }; 200 to ok().put("reply", reply.state.name) }
+            // v24: the engine choice "Mac (free)" / "speechify", and the Mac's tailnet address
+            path == "/engine" -> {
+                if (post) { j.optString("engine", "").takeIf { it.isNotBlank() }?.let { MacServer.setEngine(this, it) }; j.optString("host", "").takeIf { it.isNotBlank() }?.let { MacServer.setHost(this, it) } }
+                200 to ok().put("engine", if (MacServer.enabled(this)) "mac" else "speechify").put("host", MacServer.host(this)).put("label", MacServer.label(this))
+            }
             post && path == "/lock" -> { onMain { lock.on(j.optString("text", "Working on the phone. It will be yours again when this disappears."), j.optInt("seconds", 0)) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/request" -> { onMain { lock.request(j.optString("text", "Claude needs the phone for a moment.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/unlock" -> { onMain { lock.off() }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
@@ -694,7 +766,7 @@ class VoiceService : Service() {
             .put("queue", queued.get()).put("rate", rate).put("reading", reading).put("paused", paused).put("subtitles", conf.subtitles)
             .put("shown", overlay.shown).put("overlay", overlay.canDraw()).put("text", if (reading) nowText else "")
             .put("lock", lock.state).put("speechify", Speechify.hasKey(this))
-            .put("rotation_guard", if (rotation.allowed()) "on" else "needs permission").put("rotation_caught", rotation.caught).put("rotation_last", rotation.lastAt).put("key", Speechify.ringLabel(this)).put("voice", Speechify.voice(this)).put("model", Speechify.modelLabel(this)).put("say_error", lastSayError)
+            .put("rotation_guard", if (rotation.allowed()) "on" else "needs permission").put("rotation_caught", rotation.caught).put("rotation_last", rotation.lastAt).put("engine", MacServer.label(this)).put("mac_fallbacks", MacServer.fallbacks).put("yielded", yielded).put("waiting_for_focus", pendingPlay != null).put("focus_losses", focusLosses).put("key", Speechify.ringLabel(this)).put("voice", Speechify.voice(this)).put("model", Speechify.modelLabel(this)).put("say_error", lastSayError)
             .put("reply", reply.state.name).put("reply_to", reply.target?.from ?: "").put("reply_text", reply.lastText).put("reply_note", reply.note)
             .put("reply_shown", reply.shown).put("outbox", Outbox.size(this)).put("outbox_last", Outbox.lastResult(this))
             .put("groq", GroqKeys.hasKey(this)).put("groq_key", GroqKeys.ringLabel(this))

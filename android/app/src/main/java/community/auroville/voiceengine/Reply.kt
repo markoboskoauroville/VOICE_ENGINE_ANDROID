@@ -164,7 +164,7 @@ class Reply(private val svc: VoiceService) {
     private fun transcribeAndSend() {
         val w = lastWav ?: return
         try {
-            val text = GroqKeys.transcribe(svc, w)
+            val text = try { if (MacServer.enabled(svc)) MacServer.hear(svc, w) else GroqKeys.transcribe(svc, w) } catch (e: Exception) { if (MacServer.enabled(svc) && GroqKeys.hasKey(svc)) GroqKeys.transcribe(svc, w) else throw e }   // v24: the Mac's Whisper first (free), Groq when it does not answer
             if (text.isBlank()) { main.post { note = "I heard nothing."; setState(S.ERROR) }; return }
             lastText = text
             main.post { send() }
