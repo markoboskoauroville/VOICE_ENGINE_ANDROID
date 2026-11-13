@@ -147,7 +147,13 @@ class SubtitleOverlay(
         val g = (c.grey / 100.0 * 255).toInt().coerceIn(0, 255)
         val a = (c.band / 100.0 * 255).toInt().coerceIn(0, 255)
         b.setBackgroundColor(Color.argb(a, g, g, g))
-        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, (screen().height * c.size / 100.0).toFloat().coerceAtLeast(dp(12f).toFloat()))
+        val px = (screen().height * c.size / 100.0).toFloat().coerceAtLeast(dp(12f).toFloat())
+        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, px)
+        // The Mac's v37 hard shadow (Marko, 8.11.2026; on the phone 13.11.2026: "All of my voice engine should be
+        // synced"): solid black, no blur, down and right by 7 % of the letter size, at least 2 px. Android draws no
+        // shadow at radius 0, so the radius is the smallest it accepts, which still looks hard.
+        val off = maxOf(2f, Math.round(px * 0.07f).toFloat())
+        t.setShadowLayer(0.01f, off, off, Color.BLACK)
         t.typeface = if (c.bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         t.setTextColor(SubSettings.colourOr(c.colour, Color.parseColor("#E8A33D")))
         if (!dragging) place()

@@ -20,3 +20,6 @@ phonesay pushed an mp3 and fired a VIEW intent at MX Player (the engine only dre
 
 ## v4, 13.11.2026: text in, the engine speaks
 Marko: "No audio anymore ... the other computer sends only text and the API from Speechify is talking." Shipping mp3s over adb (v3 /play) put a second voice pipeline on every caller and a robot voice (espeak) when the caller had no Speechify. The engine now owns the voice: one key, one voice (Beatrice), the same on every caller. A key enters only from a file and is tested when picked.
+
+## v6, 13.11.2026: the Mac and the phone drifted
+The Mac got the hard shadow in v37 (8.11.2026) and the phone never did; Marko noticed. RULE: every subtitle look change in VOICE_ENGINE (Mac) is made in VOICE_ENGINE_ANDROID in the same session (and the other way round); TAKEOVER lists both. On Android a shadow radius of 0 means NO shadow: use 0.01 for a hard one.
