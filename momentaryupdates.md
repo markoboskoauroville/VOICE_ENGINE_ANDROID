@@ -56,3 +56,9 @@ Marko refines (13.11.2026, relayed): "Any application using Speechify ... It nee
 > also on the phones, please update the engine ... update the engine to fit the engine which we are developing right now on the phone itself
 
 **Status:** saved first (13.11.2026). Plan v22: (1) a /say while one is speaking is queued (never cuts in, 0.6 s gap), with previous / next sentence / skip reading / speed 0.8-1.6 (pitch kept) on the subtitle; (2) the phone's subtitle follows the Mac's v42/v43 rules in portrait: max 4 words at phrase boundaries, spoken word lit, centred in about 76 % of the width, hard black shadow on text and controls, three rows of controls (prev, pause, next, skip / minus, speed, plus / hide, stop), inside system bars and cutout with margins; (3) Speechify simba-3.2 only, v21 candidate reporting kept; (4) no new paid calls.
+
+## 13.11.2026: the subtitles drag up and down only and keep the place
+
+> Please update voice engine subtitles. I want to be able to drag them on the screen up and down only, not to the side, and they remember its last position and they keep it there. Very simple request from me, thank you.
+
+**Status:** saved first (13.11.2026). v23: the whole block (text and the three rows of keys) drags vertically only, x stays centred, clamped inside bars/cutout with 16 dp margins; a drag that begins on a key is a drag only after 10 dp of movement (the key is cancelled), a plain tap still presses; the place is saved (`ypos`) and used for every following subtitle.

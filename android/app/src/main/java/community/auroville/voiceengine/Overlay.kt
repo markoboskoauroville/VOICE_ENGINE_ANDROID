@@ -91,7 +91,7 @@ class SubtitleOverlay(private val ctx: Context, private val act: SubActions) {
         }
         shadowed(sp, dp(15f).toFloat())
         speedLabel = sp
-        val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+        val col = DragLayout(ctx).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
         col.addView(text, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         col.addView(row(KeyIcon(ctx, KeyIcon.PREV) { act.prev() }, pauseKey!!, KeyIcon(ctx, KeyIcon.NEXT) { act.next() }, KeyIcon(ctx, KeyIcon.SKIP) { act.skip() }))
         col.addView(row(KeyIcon(ctx, KeyIcon.MINUS) { act.slower() }, sp, KeyIcon(ctx, KeyIcon.PLUS) { act.faster() }))
@@ -120,7 +120,7 @@ class SubtitleOverlay(private val ctx: Context, private val act: SubActions) {
                 MotionEvent.ACTION_DOWN -> { grabY = e.rawY; startY = lp.y; moved = false; dragging = true }
                 MotionEvent.ACTION_MOVE -> {
                     val dy = e.rawY - grabY
-                    if (abs(dy) > dp(6f)) moved = true
+                    if (abs(dy) > dp(10f)) moved = true
                     if (moved) {
                         lp.y = clampY(startY + dy.toInt(), band?.height ?: 0)
                         band?.let { wm.updateViewLayout(it, lp) }
@@ -139,6 +139,7 @@ class SubtitleOverlay(private val ctx: Context, private val act: SubActions) {
         }
         text.setOnTouchListener(drag)
         col.setOnTouchListener(drag)
+        col.watch = drag; col.isMoved = { moved }
         col.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
             if (bottom - top != oldBottom - oldTop) place()
         }
@@ -229,6 +230,16 @@ class SubtitleOverlay(private val ctx: Context, private val act: SubActions) {
         if (c != lp.y) { lp.y = c; changed = true }
         if (w != lp.width) { lp.width = w; changed = true }
         if (changed) try { wm.updateViewLayout(b, lp) } catch (e: IllegalArgumentException) { }
+    }
+}
+
+/** v23: sees every touch first; once a finger that began on a key has moved 10 dp it takes over (the key is cancelled), so a drag never presses a button and a tap still does. */
+class DragLayout(ctx: Context) : LinearLayout(ctx) {
+    var watch: View.OnTouchListener? = null
+    var isMoved: () -> Boolean = { false }
+    override fun onInterceptTouchEvent(e: MotionEvent): Boolean {
+        watch?.onTouch(this, e)
+        return e.actionMasked == MotionEvent.ACTION_MOVE && isMoved()
     }
 }
 
