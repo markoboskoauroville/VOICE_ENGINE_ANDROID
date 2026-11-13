@@ -67,8 +67,9 @@ class Lock(private val ctx: Context) {
             setBackgroundColor(Color.argb(110, 0, 0, 0))
             isClickable = true                        // every touch outside the button stops here
             setOnTouchListener { _, _ -> true }
-            addView(card, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply {
-                leftMargin = dp(24); rightMargin = dp(24)
+            // In the upper third (13.11.2026: centred, the spoken subtitle sat right on top of it).
+            addView(card, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL or Gravity.TOP).apply {
+                leftMargin = dp(24); rightMargin = dp(24); topMargin = (ctx.resources.displayMetrics.heightPixels * 0.18f).toInt()
             })
         }
         val lp = WindowManager.LayoutParams(
