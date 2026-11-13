@@ -537,6 +537,6 @@ class VoiceService : Service() {
         return JSONObject().put("app", "voiceengine").put("version", v).put("port", port)
             .put("reading", reading).put("paused", paused).put("subtitles", conf.subtitles)
             .put("shown", overlay.shown).put("overlay", overlay.canDraw()).put("text", if (reading) nowText else "")
-            .put("speechify", Speechify.hasKey(this)).put("voice", Speechify.voice(this)).put("say_error", lastSayError)
+            .put("speechify", Speechify.hasKey(this)).put("key", Speechify.ringLabel(this)).put("voice", Speechify.voice(this)).put("say_error", lastSayError)
     }
 }

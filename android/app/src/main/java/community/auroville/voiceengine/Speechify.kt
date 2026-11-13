@@ -39,21 +39,41 @@ object Speechify {
         return g.generateKey()
     }
 
-    fun saveKey(c: Context, key: String): Boolean = runCatching {
+    private fun enc(t: String): String {
         val ci = Cipher.getInstance("AES/GCM/NoPadding"); ci.init(Cipher.ENCRYPT_MODE, secret())
-        val enc = ci.doFinal(key.trim().toByteArray())
-        p(c).edit().putString("k", Base64.encodeToString(ci.iv + enc, Base64.NO_WRAP)).apply(); true
-    }.getOrDefault(false)
+        return Base64.encodeToString(ci.iv + ci.doFinal(t.toByteArray()), Base64.NO_WRAP)
+    }
 
-    fun key(c: Context): String? = runCatching {
-        val raw = Base64.decode(p(c).getString("k", null) ?: return null, Base64.NO_WRAP)
+    private fun dec(b: String): String? = runCatching {
+        val raw = Base64.decode(b, Base64.NO_WRAP)
         val ci = Cipher.getInstance("AES/GCM/NoPadding")
         ci.init(Cipher.DECRYPT_MODE, secret(), GCMParameterSpec(128, raw.copyOfRange(0, 12)))
         String(ci.doFinal(raw.copyOfRange(12, raw.size)))
     }.getOrNull()
 
-    fun hasKey(c: Context) = p(c).getString("k", null) != null
-    fun deleteKey(c: Context) = p(c).edit().remove("k").apply()
+    /**
+     * The key ring (13.11.2026: "There are multiple ones ... we use the fallback mechanism. If the key is exhausted, we
+     * rotate it"). Every key that worked when the file was picked, in file order, encrypted as one block.
+     */
+    fun saveKeys(c: Context, keys: List<String>): Boolean = runCatching {
+        p(c).edit().putString("ks", enc(keys.joinToString("\n"))).remove("k").putInt("cur", 0).apply(); true
+    }.getOrDefault(false)
+
+    fun keys(c: Context): List<String> {
+        p(c).getString("ks", null)?.let { b -> return dec(b)?.lines()?.filter { it.isNotBlank() }.orEmpty() }
+        return p(c).getString("k", null)?.let { dec(it) }?.let { listOf(it) }.orEmpty()   // v4 first cut: one key
+    }
+
+    fun key(c: Context): String? = keys(c).firstOrNull()
+
+    fun hasKey(c: Context) = keys(c).isNotEmpty()
+    fun deleteKey(c: Context) = p(c).edit().remove("k").remove("ks").remove("cur").apply()
+
+    /** Which key speaks now (1-based) and how many there are, for the window and /status. */
+    fun ringLabel(c: Context): String { val n = keys(c).size; return if (n == 0) "none" else "${(cursor(c) % n) + 1}/$n" }
+
+    private fun cursor(c: Context) = p(c).getInt("cur", 0)
+    private fun setCursor(c: Context, i: Int) = p(c).edit().putInt("cur", i).apply()
 
     fun voice(c: Context): String = p(c).getString("voice", DEFAULT_VOICE) ?: DEFAULT_VOICE
     fun setVoice(c: Context, v: String) = p(c).edit().putString("voice", v).apply()
@@ -82,7 +102,23 @@ object Speechify {
      * offsets in [text], start and end in seconds). Throws with a short reason on failure.
      */
     fun speak(c: Context, text: String, voice: String = voice(c)): Spoken {
-        val key = key(c) ?: throw IllegalStateException("no Speechify key: pick the key file in Voice Engine")
+        val all = keys(c)
+        if (all.isEmpty()) throw IllegalStateException("no Speechify key: pick the key file in Voice Engine")
+        // Forward-only ring, as in TTT: start at the key that spoke last; refused (401/403), out of free use (402) or
+        // throttled (429) moves to the next and stays there; wraps to key 1 after the last.
+        val start = cursor(c) % all.size
+        var last = 0
+        for (step in all.indices) {
+            val idx = (start + step) % all.size
+            val r = speakWith(all[idx], text, voice)
+            if (r.first == 200) { setCursor(c, idx); return r.second!! }
+            last = r.first
+            if (r.first !in setOf(401, 402, 403, 429)) break
+        }
+        throw IllegalStateException(if (last in setOf(401, 402, 403, 429)) "every Speechify key is out ($last)" else "Speechify answered $last")
+    }
+
+    private fun speakWith(key: String, text: String, voice: String): Pair<Int, Spoken?> {
         var lastCode = 0
         for (model in listOf("simba-multilingual", "simba-english")) {
             val conn = (URL("$BASE/audio/speech").openConnection() as HttpURLConnection).apply {
@@ -92,13 +128,14 @@ object Speechify {
             val body = JSONObject().put("input", text).put("voice_id", voice).put("audio_format", "mp3").put("model", model)
             conn.outputStream.use { it.write(body.toString().toByteArray()) }
             lastCode = conn.responseCode
-            if (lastCode != 200) continue
+            if (lastCode in setOf(401, 402, 403, 429)) return lastCode to null   // a key problem: the next key
+            if (lastCode != 200) continue                                        // a model problem: the next model
             val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
             val audio = json.optString("audio_data")
-            if (audio.isBlank()) throw IllegalStateException("Speechify sent no audio")
-            return Spoken(audio, words(text, json.optJSONObject("speech_marks")))
+            if (audio.isBlank()) return -1 to null
+            return 200 to Spoken(audio, words(text, json.optJSONObject("speech_marks")))
         }
-        throw IllegalStateException("Speechify answered $lastCode")
+        return lastCode to null
     }
 
     /** Speechify's marks (chunks of type word, start/end characters, start_time/end_time ms) as the engine's words. */

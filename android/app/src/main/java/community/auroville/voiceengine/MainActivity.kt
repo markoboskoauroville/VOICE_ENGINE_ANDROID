@@ -69,13 +69,15 @@ class MainActivity : Activity() {
             val text = runCatching { contentResolver.openInputStream(uri)?.use { String(it.readBytes().take(200_000).toByteArray()) } }.getOrNull().orEmpty()
             val keys = Speechify.candidates(text)
             val lines = ArrayList<String>()
-            var kept = false
+            val good = ArrayList<String>()
             for ((i, k) in keys.withIndex()) {
                 val r = Speechify.test(k)
                 lines += "Key ${i + 1}: $r"
-                if (!kept && r.startsWith("works")) kept = Speechify.saveKey(this, k)
+                if (r.startsWith("works")) good += k
             }
-            val report = if (keys.isEmpty()) "No key found in that file." else lines.joinToString("\n") + if (kept) "\nKept the first one that works." else "\nNone kept."
+            val kept = good.isNotEmpty() && Speechify.saveKeys(this, good)
+            val report = if (keys.isEmpty()) "No key found in that file." else lines.joinToString("\n") +
+                if (kept) "\nKept ${good.size} working key(s); they rotate when one is out." else "\nNone kept."
             runOnUiThread { keyReport = report; build() }
         }.start()
     }
@@ -183,12 +185,16 @@ class MainActivity : Activity() {
 
         // v4 (13.11.2026): the voice is Speechify, spoken here; other computers send text only.
         box.addView(label("VOICE (SPEECHIFY)"))
-        box.addView(label(if (Speechify.hasKey(this)) "KEY: SAVED · VOICE ${Speechify.voice(this).uppercase()}" else "KEY: NONE YET · PICK THE FILE WITH YOUR SPEECHIFY KEY", 12f, dim, 4))
+        box.addView(label(if (Speechify.hasKey(this)) "KEYS: ${Speechify.keys(this).size} · SPEAKING ON ${Speechify.ringLabel(this)} · VOICE ${Speechify.voice(this).uppercase()}" else "KEY: NONE YET · PICK THE FILE WITH YOUR SPEECHIFY KEY", 12f, dim, 4))
         box.addView(row(word("PICK KEY FILE", false) {
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), PICK_KEY)
         }, word("RE-TEST", false) {
-            val k = Speechify.key(this) ?: return@word
-            Thread { val r = Speechify.test(k); runOnUiThread { keyReport = "Key: $r"; build() } }.start()
+            val ks = Speechify.keys(this)
+            if (ks.isEmpty()) return@word
+            Thread {
+                val res = ks.mapIndexed { i, k -> "Key ${i + 1}: " + Speechify.test(k) }
+                runOnUiThread { keyReport = res.joinToString("\n"); build() }
+            }.start()
         }, word("DELETE", false) { Speechify.deleteKey(this); keyReport = "Key deleted."; build() }))
         if (keyReport.isNotEmpty()) box.addView(label(keyReport, 14f, fg, 6))
         box.addView(row(word("SAY A TEST SENTENCE", false) {
