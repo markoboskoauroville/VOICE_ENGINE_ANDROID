@@ -52,10 +52,11 @@ object MacServer {
         if (audio.isBlank()) throw IllegalStateException("Mac sent no audio")
         val src = j.optJSONArray("words") ?: JSONArray()
         val words = JSONArray()
-        for (i in 0 until src.length()) {          // the engine's words: t = start, d = END (Speechify.words), the Mac's d is a duration
+        for (i in 0 until src.length()) {          // the engine's words: t = start, d = END (Speechify.words, and the Mac's)
             val o = src.optJSONObject(i) ?: continue
             val t = o.optDouble("t")
-            words.put(JSONObject().put("s", o.optInt("s")).put("e", o.optInt("e")).put("t", t).put("d", t + o.optDouble("d")))
+            // the Mac's word "d" is the END time of the word, as the engine's own (Beatrice marks); never earlier than t
+            words.put(JSONObject().put("s", o.optInt("s")).put("e", o.optInt("e")).put("t", t).put("d", maxOf(o.optDouble("d"), t + 0.05)))
         }
         lastEngine = j.optString("engine") + (if (j.optBoolean("cached")) " (cached)" else "")
         return Speechify.Spoken(audio, words)
