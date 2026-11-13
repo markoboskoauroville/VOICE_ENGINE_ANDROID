@@ -31,13 +31,17 @@ class Lock(private val ctx: Context) {
     private val main = Handler(Looper.getMainLooper())
     private var root: FrameLayout? = null
     private var detail: TextView? = null
-    @Volatile var state = "off"          // off | on | overridden
+    @Volatile var state = "off"          // off | on | overridden | requested
         private set
+    private var lastText = ""
+    private var blob: TextView? = null
     private var back: Runnable? = null
 
     private fun dp(v: Int) = (v * ctx.resources.displayMetrics.density).toInt()
 
     fun on(text: String) {
+        lastText = text
+        closeBlob()
         detail?.let { it.text = text; if (state == "on") { root?.visibility = View.VISIBLE; return } }
         if (!Settings.canDrawOverlays(ctx)) return
         close()
@@ -92,9 +96,61 @@ class Lock(private val ctx: Context) {
         main.postDelayed(b, ms.coerceIn(100, 15000))
     }
 
-    fun off() { close(); state = "off" }
+    fun off() { close(); closeBlob(); state = "off" }
 
-    private fun override() { close(); state = "overridden" }
+    /**
+     * v11 (Marko, 13.11.2026: "if you are using the phone and I take over, I need to have ability give you back the
+     * phone ... some floating blob"). After LET ME USE IT a small blob stays at the side: a tap gives the phone back and
+     * the lock returns. Never focusable, only the blob itself takes touches; drag it up or down.
+     */
+    private fun override() { close(); state = "overridden"; showBlob("GIVE THE PHONE\nBACK TO CLAUDE") { on(lastText.ifBlank { "Back to work. It is yours again when this disappears." }) } }
+
+    /** Claude needs the phone while Marko uses it: the blob asks; a tap hands it over (the lock comes on). */
+    fun request(text: String) {
+        if (state == "on") return
+        lastText = text
+        state = "requested"
+        showBlob("CLAUDE ASKS\nFOR THE PHONE") { on(lastText) }
+    }
+
+    private fun showBlob(label: String, tap: () -> Unit) {
+        closeBlob()
+        if (!Settings.canDrawOverlays(ctx)) return
+        val orange = Color.parseColor("#E8A33D")
+        val b = TextView(ctx).apply {
+            this.text = label; textSize = 13f; setTextColor(Color.BLACK); gravity = Gravity.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            background = GradientDrawable().apply { cornerRadius = dp(22).toFloat(); setColor(orange); setStroke(dp(2), Color.BLACK) }
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            elevation = dp(6).toFloat()
+        }
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.END or Gravity.TOP; x = dp(8); y = (ctx.resources.displayMetrics.heightPixels * 0.35f).toInt() }
+        var downY = 0f; var startY = 0; var moved = false
+        b.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> { downY = e.rawY; startY = lp.y; moved = false; true }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val dy = (e.rawY - downY).toInt()
+                    if (kotlin.math.abs(dy) > dp(6)) { moved = true; lp.y = (startY + dy).coerceAtLeast(0); runCatching { wm.updateViewLayout(v, lp) } }
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP -> { if (!moved) { closeBlob(); tap() }; true }
+                else -> false
+            }
+        }
+        try { wm.addView(b, lp) } catch (e: Exception) { return }
+        blob = b
+    }
+
+    private fun closeBlob() {
+        blob?.let { try { wm.removeView(it) } catch (e: Exception) { } }
+        blob = null
+    }
 
     private fun close() {
         back?.let { main.removeCallbacks(it) }; back = null

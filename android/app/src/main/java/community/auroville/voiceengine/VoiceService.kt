@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicReference
  *   POST /start {id,text,words}   a reading begins; words [{s,e,t,d}] as MA Reader's (code points, seconds), may be []
  *   POST /pos {id,pos,paused,dur} where the voice is -> {"cmd": "" | "stop" | "toggle"}
  *   POST /end {id}                the voice stopped; the last words stay `linger` seconds
- *   POST /lock {text} | /unlock | /through {ms}   v7: "Claude is using the phone" (blocks touches, LET ME USE IT overrides)
+ *   POST /lock {text} | /unlock | /through {ms} | /request {text}  (v11: the blob that asks for / gives back the phone)   v7: "Claude is using the phone" (blocks touches, LET ME USE IT overrides)
  *   POST /say {text, voice?, id?}  v4: text only; the engine asks Speechify (its own key, Beatrice by default) and speaks
  *   POST /play {id,text,audio,words,dur}   v3: the engine plays the sound itself (audio = base64 mp3), with the subtitle
  *   POST /test {text,seconds}     a subtitle without a voice, to see how it looks
@@ -517,6 +517,7 @@ class VoiceService : Service() {
                 }
             }
             post && path == "/lock" -> { onMain { lock.on(j.optString("text", "Working on the phone. It will be yours again when this disappears.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
+            post && path == "/request" -> { onMain { lock.request(j.optString("text", "Claude needs the phone for a moment.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/unlock" -> { onMain { lock.off() }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/through" -> { onMain { lock.through(j.optLong("ms", 800L)) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/play" -> { val r = onMain { play(j) } ?: false; (if (r) 200 else 400) to JSONObject().put("ok", r).put("subtitles", conf.subtitles) }
