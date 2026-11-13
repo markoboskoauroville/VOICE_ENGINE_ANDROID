@@ -24,10 +24,12 @@ object Outbox {
     fun size(c: Context): Int = synchronized(lock) { load(c).length() }
     fun lastResult(c: Context): String = p(c).getString("last", "") ?: ""
 
-    fun add(c: Context, to: String, toId: String, text: String, relay: String, token: String, at: String) = synchronized(lock) {
+    fun add(c: Context, to: String, toId: String, text: String, relay: String, token: String, at: String): String = synchronized(lock) {
+        val id = java.util.UUID.randomUUID().toString()
         val a = load(c)
-        a.put(JSONObject().put("to", to).put("to_id", toId).put("text", text).put("at", at).put("relay", relay).put("token", token))
+        a.put(JSONObject().put("to", to).put("to_id", toId).put("text", text).put("at", at).put("relay", relay).put("token", token).put("id", id))
         save(c, a)
+        id
     }
 
     /** Blocking. Tries every waiting reply; returns how many are still waiting. */
@@ -45,11 +47,11 @@ object Outbox {
 
     private fun deliver(o: JSONObject): Boolean {
         val urls = listOfNotNull(o.optString("relay").ifBlank { null }) + FALLBACK
-        val body = JSONObject().put("to", o.optString("to")).put("to_id", o.optString("to_id")).put("text", o.optString("text")).put("at", o.optString("at")).toString().toByteArray()
+        val body = JSONObject().put("to", o.optString("to")).put("to_id", o.optString("to_id")).put("text", o.optString("text")).put("at", o.optString("at")).put("id", o.optString("id")).toString().toByteArray()
         for (u in urls.distinct()) {
             try {
                 val conn = (URL(u.trimEnd('/') + "/reply").openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"; doOutput = true; connectTimeout = 4000; readTimeout = 8000
+                    requestMethod = "POST"; doOutput = true; connectTimeout = 4000; readTimeout = 25000
                     setRequestProperty("Content-Type", "application/json")
                     if (o.optString("token").isNotBlank()) setRequestProperty("X-Mantra-Token", o.optString("token"))
                 }

@@ -58,18 +58,42 @@ def resolve(to_id, to):
     return hit[0] if len(hit) == 1 else None
 
 
-def deliver(to_id, to, text, at):
+SEEN = set()
+SEEN_LOCK = threading.Lock()
+
+
+def seen_before(mid):
+    """Each reply is delivered exactly once: the phone gives every reply an id; a repeat (a retry after a slow answer) is answered 200 and ignored."""
+    if not mid:
+        return False
+    with SEEN_LOCK:
+        if not SEEN:
+            try:
+                SEEN.update(open(os.path.join(DIR, "seen-ids")).read().split())
+            except Exception:
+                pass
+        if mid in SEEN:
+            return True
+        SEEN.add(mid)
+        os.makedirs(DIR, exist_ok=True)
+        with open(os.path.join(DIR, "seen-ids"), "a") as f:
+            f.write(mid + "\n")
+    return False
+
+
+def deliver(to_id, to, text, at, mid=""):
+    if seen_before(mid):
+        return {"ok": True, "duplicate": True}
     s = resolve(to_id, to)
     key = (s or {}).get("sid") or to_id or "".join(c if c.isalnum() or c in "-_" else "_" for c in (to or "unknown"))[:60] or "unknown"
     os.makedirs(DIR, exist_ok=True)
     rec = {"to": to, "to_id": key, "text": text, "at": at or time.strftime("%Y-%m-%dT%H:%M:%S%z"), "from": "Marko, by voice"}
     with open(os.path.join(DIR, key + ".jsonl"), "a") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    typed = False
-    if s:
-        r = subprocess.run([sys.executable, OTHER, "type", s["sid"], f"[voice reply from Marko] {text}"], capture_output=True, text=True, timeout=20)
-        typed = r.returncode == 0
-    return {"ok": True, "session": (s or {}).get("name", ""), "file": key + ".jsonl", "typed": typed}
+    if s:   # typing takes seconds: answer the phone first, type in the background
+        threading.Thread(target=lambda: subprocess.run([sys.executable, OTHER, "type", s["sid"], f"[voice reply from Marko] {text}"],
+                                                       capture_output=True, text=True, timeout=30), daemon=True).start()
+    return {"ok": True, "session": (s or {}).get("name", ""), "file": key + ".jsonl", "typed": bool(s)}
 
 
 class H(BaseHTTPRequestHandler):
@@ -99,7 +123,7 @@ class H(BaseHTTPRequestHandler):
         text = str(j.get("text", "")).strip()
         if not text:
             return self._send(400, {"error": "no text"})
-        self._send(200, deliver(str(j.get("to_id", "")), str(j.get("to", "")), text, str(j.get("at", ""))))
+        self._send(200, deliver(str(j.get("to_id", "")), str(j.get("to", "")), text, str(j.get("at", "")), str(j.get("id", ""))))
 
 
 def tailscale_ip():

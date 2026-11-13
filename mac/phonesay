@@ -50,9 +50,27 @@ def ensure_relay():
                 return
 
 
+def reachable(serial):
+    try:
+        if ":" in serial and not serial.startswith("emulator"):
+            subprocess.run([ADB, "connect", serial], capture_output=True, text=True, timeout=10)
+        return adb(serial, "get-state", timeout=8).stdout.strip() == "device"
+    except Exception:
+        return False
+
+
+def pick_phone(given):
+    """--phone, else $NOTHING_ADB, else the Pixel 7 (Tailscale adb); the first that answers. None answering: the first, and the Mac speaks."""
+    cands = [given] if given else [os.environ.get("NOTHING_ADB", "100.67.149.40:5555"), "100.70.23.53:5555"]
+    for c in cands:
+        if reachable(c):
+            return c
+    return cands[0]
+
+
 def main():
     a = sys.argv[1:]
-    frm = None; phone = os.environ.get("NOTHING_ADB", "100.67.149.40:5555")
+    frm = None; phone = None
     pos = []
     i = 0
     while i < len(a):
@@ -85,8 +103,7 @@ def main():
         ts = subprocess.run(["/usr/local/bin/tailscale", "ip", "-4"], capture_output=True, text=True).stdout.split()
         body.update({"from": frm, "from_id": sid, "reply": True, "token": tok,
                      "relay": f"http://{ts[0]}:{RELAY_PORT}" if ts else f"http://127.0.0.1:{RELAY_PORT}"})
-    if ":" in phone and not phone.startswith("emulator"):
-        adb(phone, "get-state", timeout=20)
+    phone = pick_phone(phone)
     port = 18700 + int(time.time() * 1000) % 200
     try:
         if adb(phone, "forward", f"tcp:{port}", "tcp:8720").returncode != 0: raise RuntimeError("adb forward failed")

@@ -59,6 +59,8 @@ class Reply(private val svc: VoiceService) {
     private var panel: LinearLayout? = null
     private var lp: WindowManager.LayoutParams? = null
     private var levelView: LevelView? = null
+    private var ringView: RingView? = null
+    private val SILENCE = 35                              // 100 ms steps
     @Volatile private var stopFlag = false
     private var countdown: Runnable? = null
     private var hideJob: Runnable? = null
@@ -142,7 +144,9 @@ class Reply(private val svc: VoiceService) {
                 else if (rms > thr) { spoke = true; quiet = 0 } else quiet++
                 val lv = (rms / 6000.0).coerceIn(0.0, 1.0).toFloat()
                 main.post { levelView?.set(lv) }
-                if (spoke && quiet >= 15) break             // 1.5 s of silence after speech
+                if (spoke && quiet >= SILENCE) break         // 3.5 s of silence after speech (he pauses to think; STOP finishes early)
+                val ring = if (spoke && quiet >= SILENCE - 20) (quiet - (SILENCE - 20)) / 20f else 0f   // the last 2 s: a ring fills
+                main.post { ringView?.set(ring) }
                 if (!spoke && steps >= 100) break           // nothing said in 10 s
             }
         } finally { rec.stop(); rec.release() }
@@ -224,7 +228,7 @@ class Reply(private val svc: VoiceService) {
     private fun render() {
         if (state == S.IDLE) { close(); return }
         val p = panel ?: open() ?: return
-        p.removeAllViews(); levelView = null; sendLabel = null
+        p.removeAllViews(); levelView = null; ringView = null; sendLabel = null
         val w = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8f) }
         val who = target?.from?.takeIf { it.isNotBlank() }?.let { "to $it" } ?: ""
         when (state) {
@@ -236,7 +240,11 @@ class Reply(private val svc: VoiceService) {
             S.RECORDING -> {
                 p.addView(line("LISTENING $who", 14f, orange))
                 val lv = LevelView(svc); levelView = lv
-                p.addView(lv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(18f)).apply { topMargin = dp(6f) })
+                val rg = RingView(svc); ringView = rg
+                val r = LinearLayout(svc).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                r.addView(lv, LinearLayout.LayoutParams(0, dp(18f), 1f))
+                r.addView(rg, LinearLayout.LayoutParams(dp(30f), dp(30f)).apply { marginStart = dp(10f) })
+                p.addView(r, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6f) })
                 p.addView(btn("STOP", true) { stopRecording() }, w)
             }
             S.TRANSCRIBING -> p.addView(line("WRITING DOWN WHAT YOU SAID …", 16f, orange))
@@ -282,7 +290,7 @@ class Reply(private val svc: VoiceService) {
 
     fun close() {
         val p = panel ?: return
-        panel = null; lp = null; levelView = null; sendLabel = null
+        panel = null; lp = null; levelView = null; ringView = null; sendLabel = null
         try { wm.removeView(p) } catch (e: IllegalArgumentException) { }
     }
 
@@ -298,5 +306,19 @@ class LevelView(ctx: Context) : View(ctx) {
     override fun onDraw(c: Canvas) {
         c.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), height / 2f, height / 2f, bg)
         c.drawRoundRect(0f, 0f, maxOf(height.toFloat(), width * level), height.toFloat(), height / 2f, height / 2f, fg)
+    }
+}
+
+/** A ring that fills during the last 2 s of silence before the recording ends by itself (STOP finishes at once). */
+class RingView(ctx: Context) : View(ctx) {
+    private var v = 0f
+    private val back = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#333333"); style = Paint.Style.STROKE }
+    private val front = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#E8A33D"); style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+    fun set(x: Float) { if (x != v) { v = x; invalidate() } }
+    override fun onDraw(c: Canvas) {
+        val w = width * 0.14f; back.strokeWidth = w; front.strokeWidth = w
+        val r = android.graphics.RectF(w, w, width - w, height - w)
+        c.drawOval(r, back)
+        if (v > 0f) c.drawArc(r, -90f, 360f * v.coerceAtMost(1f), false, front)
     }
 }
