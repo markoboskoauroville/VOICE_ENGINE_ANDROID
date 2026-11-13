@@ -55,6 +55,12 @@ def resolve(to_id, to):
         if len(hit) == 1:
             return hit[0]
     hit = [s for s in ss if t in (s.get("name") or "").lower()]
+    if len(hit) == 1:
+        return hit[0]
+    # the tab's suffix changes ("(MPA)" -> "(Voice)", "(Failed)"): match on the base name before " (" too (13.11.2026)
+    import re as _re
+    tb = _re.sub(r"\s*\(.*\)\s*$", "", t)
+    hit = [s for s in ss if _re.sub(r"\s*\(.*\)\s*$", "", (s.get("name") or "").lower()) == tb]
     return hit[0] if len(hit) == 1 else None
 
 
