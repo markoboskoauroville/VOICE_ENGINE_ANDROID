@@ -724,6 +724,16 @@ class VoiceService : Service() {
                 if (post) { j.optString("engine", "").takeIf { it.isNotBlank() }?.let { MacServer.setEngine(this, it) }; j.optString("host", "").takeIf { it.isNotBlank() }?.let { MacServer.setHost(this, it) } }
                 200 to ok().put("engine", if (MacServer.enabled(this)) "mac" else "speechify").put("host", MacServer.host(this)).put("label", MacServer.label(this))
             }
+            // v26: a stand-in for TTT's record button (same focus request: GAIN_TRANSIENT_EXCLUSIVE, speech), for tests: POST /focus-test {seconds}
+            post && path == "/focus-test" -> {
+                val secs = j.optInt("seconds", 4)
+                val rq = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+                    .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                    .setOnAudioFocusChangeListener { }.build()
+                val r = audioMgr.requestAudioFocus(rq)
+                main.postDelayed({ audioMgr.abandonAudioFocusRequest(rq) }, secs * 1000L)
+                200 to ok().put("granted", r == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED).put("seconds", secs)
+            }
             post && path == "/lock" -> { onMain { lock.on(j.optString("text", "Working on the phone. It will be yours again when this disappears."), j.optInt("seconds", 0)) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/request" -> { onMain { lock.request(j.optString("text", "Claude needs the phone for a moment.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/unlock" -> { onMain { lock.off() }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
