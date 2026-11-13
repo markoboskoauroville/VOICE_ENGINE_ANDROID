@@ -29,3 +29,7 @@ Marko: "3 eq freee"
 ## 13.11.2026 (on the Pixel 7): SEND ends the reply; nothing automatic
 Marko: "voice engine is not good. It doesn't stop. Please don't automatically reply when I say "reply." I need to say "send." Don't cut automatically. Any"
 **Status:** saved first (read as: v17: REPLY starts recording and it never stops by itself (no silence cut, no 60 s cap in practice: 10 min); his reply ends only when he presses SEND (or says the word "send" as the last word, which is removed from the text); no auto-send countdown; the text is sent at SEND; a CANCEL discards. The speaking voice has a visible STOP that stops it at once.)
+
+## 13.11.2026 (on the Pixel 7): the TTT recording interface
+Marko: "please copy the user interface of my TTT for recording and sending. Simply, I will send when I press Send. If there is an error (like in TTT), then it's sent, not automatically. Please"
+**Status:** saved first (read as: the reply recorder copies TTT's record/send interface (repo TTT, folder TTT_MINI: its record key, level, timer, SEND); nothing is sent until he presses SEND; on an error the take is kept, like TTT, and goes out when he presses SEND again, never by itself.)
