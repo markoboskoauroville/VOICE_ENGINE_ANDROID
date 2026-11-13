@@ -37,6 +37,12 @@ class Lock(private val ctx: Context) {
     private var blob: TextView? = null
     private var back: Runnable? = null
 
+    /** The height of the clock-and-icons strip, until the insets say it exactly. */
+    private fun statusBar(): Int {
+        val id = ctx.resources.getIdentifier("status_bar_height", "dimen", "android")
+        return if (id > 0) ctx.resources.getDimensionPixelSize(id) else dp(28)
+    }
+
     private fun dp(v: Int) = (v * ctx.resources.displayMetrics.density).toInt()
 
     private var bar: LinearLayout? = null
@@ -106,7 +112,7 @@ class Lock(private val ctx: Context) {
         val b = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(Color.parseColor("#F2101114"))
-            setPadding(dp(10), dp(4), dp(10), dp(4))
+            setPadding(dp(10), statusBar() + dp(4), dp(10), dp(6))
             addView(FrameLayout(ctx).apply { addView(d, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_VERTICAL or Gravity.START)) },
                 LinearLayout.LayoutParams(0, -2, 1f))
             addView(hole, LinearLayout.LayoutParams(dp(56), 1))
@@ -128,6 +134,10 @@ class Lock(private val ctx: Context) {
         b.setOnApplyWindowInsetsListener { v, ins ->
             val cut = ins.displayCutout?.boundingRects?.firstOrNull { it.top == 0 }
             if (cut != null) hole.layoutParams = LinearLayout.LayoutParams(cut.width() + dp(12), 1)
+            // v14: the clock and icons are drawn over every overlay; the bar's words start under them, its dark band
+            // runs up behind them (screenshot 13.11.2026: "CLAUDE · Testing" was written across the clock).
+            @Suppress("DEPRECATION") val sb = ins.systemWindowInsetTop
+            v.setPadding(dp(10), sb + dp(4), dp(10), dp(6))
             v.onApplyWindowInsets(ins)
         }
         bar = b; detail = d; state = "on"
