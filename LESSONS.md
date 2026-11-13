@@ -24,3 +24,9 @@ Marko: "No audio anymore ... the other computer sends only text and the API from
 ## v6, 13.11.2026: the Mac and the phone drifted
 The Mac got the hard shadow in v37 (8.11.2026) and the phone never did; Marko noticed. RULE: every subtitle look change in VOICE_ENGINE (Mac) is made in VOICE_ENGINE_ANDROID in the same session (and the other way round); TAKEOVER lists both. On Android a shadow radius of 0 means NO shadow: use 0.01 for a hard one.
 - v7/v8 failed to compile 13.11.2026: inside apply{} on a TextView, `text = ...` assigned the function's own `text` parameter (val). Write `this.text` inside apply when a parameter has the same name.
+
+## v16, 13.11.2026: REPLY
+- BSD sed needs `sed -i ''`; the first push built v15 again because the version bump silently failed. Check `grep appVersion` before pushing.
+- Recording from an overlay tap needs a foreground service of type microphone (ReplyService) and RECORD_AUDIO granted first; startForeground throws SecurityException otherwise.
+- Plain http to the Mac needs usesCleartextTraffic (targetSdk 35 blocks it). The emulator reaches the Mac at 10.0.2.2.
+- The sender gives the phone the relay address and token inside the message, so the phone needs no setting and the token travels only as text.
