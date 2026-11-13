@@ -61,7 +61,8 @@ class Lock(private val ctx: Context) {
         if (endAt <= 0L) return "CLAUDE · $label"
         val left = ((endAt - System.currentTimeMillis()) / 1000).toInt()
         val t = if (left > 0) String.format("%d:%02d left", left / 60, left % 60) else "almost done"
-        return "CLAUDE · $label · $t"
+        // v15: the time first, so a long label is cut, never the time (13.11.2026: "· 3:…").
+        return "CLAUDE · $t · $label"
     }
 
     /** /lock with seconds: the time left starts again from there. */
