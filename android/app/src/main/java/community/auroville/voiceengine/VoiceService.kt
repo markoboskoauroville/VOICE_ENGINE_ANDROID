@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicReference
  *   POST /start {id,text,words}   a reading begins; words [{s,e,t,d}] as MA Reader's (code points, seconds), may be []
  *   POST /pos {id,pos,paused,dur} where the voice is -> {"cmd": "" | "stop" | "toggle"}
  *   POST /end {id}                the voice stopped; the last words stay `linger` seconds
+ *   POST /say {text, from, from_id, reply:true, relay, token}  v16: with a REPLY button; POST /offer (button, no voice); POST /reply (= the button)
  *   POST /lock {text} | /unlock | /through {ms} | /request {text}  (v11: the blob that asks for / gives back the phone)   v7: "Claude is using the phone" (blocks touches, LET ME USE IT overrides)
  *   POST /say {text, voice?, id?}  v4: text only; the engine asks Speechify (its own key, Beatrice by default) and speaks
  *   POST /play {id,text,audio,words,dur}   v3: the engine plays the sound itself (audio = base64 mp3), with the subtitle
@@ -114,7 +115,16 @@ class VoiceService : Service() {
             startForeground(NID, notification())
         }
         Thread({ serve() }, "voiceengine-http").start()
+        // v16: an answer that could not reach the Mac waits here and is tried again every 20 s
+        retry = object : Runnable {
+            override fun run() {
+                if (Outbox.size(this@VoiceService) > 0) pool.execute { runCatching { Outbox.flush(this@VoiceService) } }
+                main.postDelayed(this, 20_000)
+            }
+        }
+        main.postDelayed(retry!!, 20_000)
     }
+    private var retry: Runnable? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -127,6 +137,7 @@ class VoiceService : Service() {
 
     override fun onDestroy() {
         rotation.stop()
+        reply.close()
         instance = null
         main.removeCallbacksAndMessages(null)
         overlay.close()
@@ -206,7 +217,7 @@ class VoiceService : Service() {
     }
 
     /** Blocking: Speechify, then the v3 player and the subtitle. Used by POST /say and the window's test button. */
-    fun sayLocal(text: String, voice: String = Speechify.voice(this), id0: String = "") {
+    fun sayLocal(text: String, voice: String = Speechify.voice(this), id0: String = "", replyMsg: Boolean = false) {
         val id = id0.ifBlank { "say-" + System.currentTimeMillis() }
         try {
             val sp = Speechify.speak(this, text, voice)
@@ -214,9 +225,14 @@ class VoiceService : Service() {
             lastSayError = ""
         } catch (e: Exception) {
             lastSayError = e.message ?: e.javaClass.simpleName
-            onMain { test("Voice Engine could not speak: " + lastSayError, 5.0) }
+            // a message that wants an answer is never lost: its words stay on the screen when the voice cannot speak
+            onMain { if (replyMsg) test(text, 20.0) else test("Voice Engine could not speak: " + lastSayError, 5.0) }
         }
     }
+
+    /** v16: the reply (talking back, Reply.kt) and the queue that retries the unsent answers. */
+    val reply by lazy { Reply(this) }
+    fun silence() { if (player != null) stopPlayer() else if (reading) pendingCmd.set("stop"); hidePressed() }
 
     private fun stopPlayer() {
         playJob?.let { main.removeCallbacks(it) }; playJob = null
@@ -509,13 +525,18 @@ class VoiceService : Service() {
             post && path == "/say" -> {
                 val text = j.optString("text", "").trim()
                 if (text.isEmpty()) 400 to JSONObject().put("ok", false).put("error", "no text")
-                else if (!Speechify.hasKey(this)) 409 to JSONObject().put("ok", false).put("error", "no Speechify key: pick the key file in Voice Engine")
+                else if (!Speechify.hasKey(this) && !j.optBoolean("reply", false)) 409 to JSONObject().put("ok", false).put("error", "no Speechify key: pick the key file in Voice Engine")
                 else {
                     val voice = j.optString("voice", "").ifBlank { Speechify.voice(this) }
-                    Thread { sayLocal(text, voice, j.optString("id", "")) }.start()
-                    200 to JSONObject().put("ok", true).put("voice", voice).put("subtitles", conf.subtitles)
+                    val wantsReply = j.optBoolean("reply", false)
+                    if (wantsReply) onMain { reply.offer(targetOf(j)) }
+                    Thread { sayLocal(text, voice, j.optString("id", ""), wantsReply) }.start()
+                    200 to JSONObject().put("ok", true).put("voice", voice).put("subtitles", conf.subtitles).put("reply", wantsReply).put("spoken", Speechify.hasKey(this))
                 }
             }
+            // v16: a message from a session with the REPLY button but no voice (tests, or when he reads it); POST /reply = the button pressed
+            post && path == "/offer" -> { onMain { val t = j.optString("text", "").trim(); if (t.isNotEmpty()) test(t, 20.0); reply.offer(targetOf(j)) }; 200 to ok().put("reply", reply.state.name) }
+            post && path == "/reply" -> { onMain { reply.press() }; 200 to ok().put("reply", reply.state.name) }
             post && path == "/lock" -> { onMain { lock.on(j.optString("text", "Working on the phone. It will be yours again when this disappears."), j.optInt("seconds", 0)) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/request" -> { onMain { lock.request(j.optString("text", "Claude needs the phone for a moment.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/unlock" -> { onMain { lock.off() }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
@@ -543,6 +564,8 @@ class VoiceService : Service() {
         }
     }
 
+    private fun targetOf(j: JSONObject) = Target(j.optString("from", ""), j.optString("from_id", ""), j.optString("relay", ""), j.optString("token", ""))
+
     private fun status(): JSONObject {
         val v = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }
         return JSONObject().put("app", "voiceengine").put("version", v).put("port", port)
@@ -550,5 +573,9 @@ class VoiceService : Service() {
             .put("shown", overlay.shown).put("overlay", overlay.canDraw()).put("text", if (reading) nowText else "")
             .put("lock", lock.state).put("speechify", Speechify.hasKey(this))
             .put("rotation_guard", if (rotation.allowed()) "on" else "needs permission").put("rotation_caught", rotation.caught).put("rotation_last", rotation.lastAt).put("key", Speechify.ringLabel(this)).put("voice", Speechify.voice(this)).put("say_error", lastSayError)
+            .put("reply", reply.state.name).put("reply_to", reply.target?.from ?: "").put("reply_text", reply.lastText).put("reply_note", reply.note)
+            .put("reply_shown", reply.shown).put("outbox", Outbox.size(this)).put("outbox_last", Outbox.lastResult(this))
+            .put("groq", GroqKeys.hasKey(this)).put("groq_key", GroqKeys.ringLabel(this))
+            .put("mic", checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED)
     }
 }

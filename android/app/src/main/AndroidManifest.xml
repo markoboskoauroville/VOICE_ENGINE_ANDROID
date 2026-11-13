@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <application
         android:label="Voice Engine (Mantra)"
@@ -16,6 +18,7 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:allowBackup="false"
+        android:usesCleartextTraffic="true"
         android:supportsRtl="true">
 
         <activity
@@ -36,6 +39,11 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Draws the subtitle of the words being spoken over other apps, and serves 127.0.0.1 for the speaking program in Termux" />
         </service>
+
+        <service
+            android:name=".ReplyService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
         <receiver
             android:name=".BootReceiver"

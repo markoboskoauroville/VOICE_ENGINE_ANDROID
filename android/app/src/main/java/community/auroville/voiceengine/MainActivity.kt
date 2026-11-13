@@ -26,7 +26,7 @@ import android.widget.TextView
  */
 class MainActivity : Activity() {
 
-    companion object { const val PICK_KEY = 41 }
+    companion object { const val PICK_KEY = 41; const val PICK_GROQ = 42; const val MIC = 43 }
 
     private val bg = Color.parseColor("#111111")
     private val fg = Color.parseColor("#E6E6E6")
@@ -42,6 +42,9 @@ class MainActivity : Activity() {
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         VoiceService.start(this)
+        if (intent?.getBooleanExtra("mic", false) == true && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), MIC)
+        }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
@@ -62,24 +65,30 @@ class MainActivity : Activity() {
     @Deprecated("plain Activity result")
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {
         super.onActivityResult(req, res, data)
-        if (req != PICK_KEY || res != RESULT_OK) return
+        if ((req != PICK_KEY && req != PICK_GROQ) || res != RESULT_OK) return
         val uri = data?.data ?: return
+        val groq = req == PICK_GROQ
         keyReport = "Testing…"; build()
         Thread {
             val text = runCatching { contentResolver.openInputStream(uri)?.use { String(it.readBytes().take(200_000).toByteArray()) } }.getOrNull().orEmpty()
-            val keys = Speechify.candidates(text)
+            val keys = if (groq) GroqKeys.candidates(text) else Speechify.candidates(text)
             val lines = ArrayList<String>()
             val good = ArrayList<String>()
             for ((i, k) in keys.withIndex()) {
-                val r = Speechify.test(k)
+                val r = if (groq) GroqKeys.test(k) else Speechify.test(k)
                 lines += "Key ${i + 1}: $r"
                 if (r.startsWith("works")) good += k
             }
-            val kept = good.isNotEmpty() && Speechify.saveKeys(this, good)
+            val kept = good.isNotEmpty() && (if (groq) GroqKeys.saveKeys(this, good) else Speechify.saveKeys(this, good))
             val report = if (keys.isEmpty()) "No key found in that file." else lines.joinToString("\n") +
                 if (kept) "\nKept ${good.size} working key(s); they rotate when one is out." else "\nNone kept."
             runOnUiThread { keyReport = report; build() }
         }.start()
+    }
+
+    override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, res: IntArray) {
+        super.onRequestPermissionsResult(code, perms, res)
+        build()
     }
 
     override fun onResume() {
@@ -207,6 +216,27 @@ class MainActivity : Activity() {
         if (keyReport.isNotEmpty()) box.addView(label(keyReport, 14f, fg, 6))
         box.addView(row(word("SAY A TEST SENTENCE", false) {
             VoiceService.instance?.let { svc -> Thread { runCatching { svc.sayLocal("This is your voice engine speaking through Speechify.") } }.start() }
+        }))
+
+        // v16 (13.11.2026): talking back. REPLY records, Groq whisper-large-v3 writes it down, the TEXT goes to the session that spoke.
+        box.addView(label("REPLY BY VOICE (GROQ WHISPER LARGE V3)"))
+        box.addView(label(if (GroqKeys.hasKey(this)) "GROQ KEYS: ${GroqKeys.keys(this).size} · ON ${GroqKeys.ringLabel(this)}" else "GROQ KEY: NONE YET · PICK THE FILE WITH YOUR GROQ KEYS", 12f, dim, 4))
+        box.addView(row(word("PICK GROQ KEY FILE", false) {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), PICK_GROQ)
+        }, word("RE-TEST", false) {
+            val ks = GroqKeys.keys(this)
+            if (ks.isEmpty()) return@word
+            Thread {
+                val res = ks.mapIndexed { i, k -> "Groq key ${i + 1}: " + GroqKeys.test(k) }
+                runOnUiThread { keyReport = res.joinToString("\n"); build() }
+            }.start()
+        }, word("DELETE", false) { GroqKeys.deleteKeys(this); keyReport = "Groq keys deleted."; build() }))
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            box.addView(label("THE MICROPHONE IS NOT ALLOWED YET", 13f, Color.parseColor("#FF6B5E")))
+            box.addView(row(word("ALLOW MICROPHONE", true) { requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), MIC) }))
+        } else box.addView(label("MICROPHONE: ALLOWED · ANSWERS WAITING TO BE SENT: ${Outbox.size(this)}", 12f, dim, 6))
+        box.addView(row(word("SHOW A TEST REPLY BUTTON", false) {
+            VoiceService.instance?.let { v -> v.reply.offer(Target("test", "", "", "")); v.test("This is a test message. Press REPLY.", 20.0) }
         }))
 
         box.addView(label("SUBTITLES"))

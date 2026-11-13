@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""phonesay: speak a line aloud ON THE PHONE through Marko's own Voice Engine (Mantra) app. TEXT only travels.
+
+  phonesay "text" [hr|en]                       the phone speaks it (Speechify, Beatrice) with its subtitle
+  phonesay --from "<session>" "text"            same, plus a big REPLY button on the phone; Marko answers by voice, the
+                                                phone writes it down (Groq whisper-large-v3) and sends the TEXT back to
+                                                <session> through phonereply.py (see its docstring)
+  phonesay --from me "text"                     <session> = the session this command runs in
+  --phone ADDR                                  adb serial (default $NOTHING_ADB or 100.67.149.40:5555; the emulator is emulator-5554)
+
+Voice Engine Android v16+: POST /say {text, from, from_id, reply:true, relay, token}. Never an mp3: voice-text-only.md.
+Marko, 13.11.2026: "the other computer sends only text and the API from Speechify is talking" / "back and forth by voice".
+"""
+import importlib.util, json, os, socket, subprocess, sys, time, urllib.request
+
+HOME = os.path.expanduser("~")
+ADB = HOME + "/Library/Android/sdk/platform-tools/adb"
+RELAY_PORT = 8875
+REPO = os.path.dirname(os.path.realpath(__file__))
+
+
+def adb(serial, *args, timeout=20):
+    return subprocess.run([ADB, "-s", serial, *args], capture_output=True, text=True, timeout=timeout)
+
+
+def other():
+    p = HOME + "/Developer/claude-code/tools/other_sessions.py"
+    spec = importlib.util.spec_from_file_location("other_sessions", p)
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    return m
+
+
+def relay_up():
+    try:
+        return urllib.request.urlopen(f"http://127.0.0.1:{RELAY_PORT}/status", timeout=2).status == 200
+    except Exception:
+        return False
+
+
+def ensure_relay():
+    if relay_up():
+        return
+    script = next((p for p in (REPO + "/phonereply.py", HOME + "/Developer/VOICE_ENGINE_ANDROID/mac/phonereply.py") if os.path.exists(p)), None)
+    if script:
+        subprocess.Popen([sys.executable, script, "serve"], stdout=open(HOME + "/.voice-replies.log", "a"), stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+        for _ in range(20):
+            time.sleep(0.25)
+            if relay_up():
+                return
+
+
+def main():
+    a = sys.argv[1:]
+    frm = None; phone = os.environ.get("NOTHING_ADB", "100.67.149.40:5555")
+    pos = []
+    i = 0
+    while i < len(a):
+        if a[i] == "--from" and i + 1 < len(a): frm = a[i + 1]; i += 2
+        elif a[i] == "--phone" and i + 1 < len(a): phone = a[i + 1]; i += 2
+        elif a[i].startswith("-"): sys.exit(f"phonesay: unknown option '{a[i]}'\n" + __doc__)
+        else: pos.append(a[i]); i += 1
+    if not pos: sys.exit('usage: phonesay [--from "<session>"] "text" [hr|en]')
+    text = pos[0]
+    lang = pos[1] if len(pos) > 1 else "en"
+    if lang not in ("hr", "en"): sys.exit("phonesay: language must be hr or en")
+    flag = HOME + "/.voice/recording.flag"       # silent while the Sound Recorder records
+    if os.path.exists(flag):
+        try:
+            os.kill(int(open(flag).read().strip()), 0); print("phonesay: the recorder is recording, silent"); return
+        except Exception:
+            pass
+    body = {"text": text, "id": str(time.time())}
+    if frm:
+        sid = ""
+        try:
+            o = other(); sid = o.own_sid()
+            if frm == "me":
+                frm = next((s["name"] for s in o.sessions() if s["sid"] == sid), "") or "claude session"
+        except Exception:
+            pass
+        if frm == "me": frm = "claude session"
+        ensure_relay()
+        tok = open(HOME + "/.voice-replies/token").read().strip()
+        ts = subprocess.run(["/usr/local/bin/tailscale", "ip", "-4"], capture_output=True, text=True).stdout.split()
+        body.update({"from": frm, "from_id": sid, "reply": True, "token": tok,
+                     "relay": f"http://{ts[0]}:{RELAY_PORT}" if ts else f"http://127.0.0.1:{RELAY_PORT}"})
+    if ":" in phone and not phone.startswith("emulator"):
+        adb(phone, "get-state", timeout=20)
+    port = 18700 + int(time.time() * 1000) % 200
+    try:
+        if adb(phone, "forward", f"tcp:{port}", "tcp:8720").returncode != 0: raise RuntimeError("adb forward failed")
+        if frm: adb(phone, "reverse", f"tcp:{RELAY_PORT}", f"tcp:{RELAY_PORT}")   # the phone reaches the relay as 127.0.0.1 too
+        r = urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/say", json.dumps(body).encode(),
+                                                          {"Content-Type": "application/json"}), timeout=15)
+        print("speaking on the phone (Voice Engine)" + (", REPLY button up" if frm else ""), r.read().decode()[:120])
+    except Exception as e:
+        print(f"phone not reached ({e}): speaking on the Mac", file=sys.stderr)
+        subprocess.run(["langsay", lang, text])
+    finally:
+        adb(phone, "forward", "--remove", f"tcp:{port}")
+
+
+main()
