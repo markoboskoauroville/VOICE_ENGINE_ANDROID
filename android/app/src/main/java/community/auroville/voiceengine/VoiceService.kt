@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicReference
  *   POST /start {id,text,words}   a reading begins; words [{s,e,t,d}] as MA Reader's (code points, seconds), may be []
  *   POST /pos {id,pos,paused,dur} where the voice is -> {"cmd": "" | "stop" | "toggle"}
  *   POST /end {id}                the voice stopped; the last words stay `linger` seconds
+ *   POST /say {text, voice?, id?}  v4: text only; the engine asks Speechify (its own key, Beatrice by default) and speaks
  *   POST /play {id,text,audio,words,dur}   v3: the engine plays the sound itself (audio = base64 mp3), with the subtitle
  *   POST /test {text,seconds}     a subtitle without a voice, to see how it looks
  *   POST /hide, /stop, /toggle    the subtitle's HIDE, its STOP, the notification's pause/play
@@ -164,6 +165,7 @@ class VoiceService : Service() {
 
     // v3: the engine's own player (phonesay, 10.11.2026), so no audio file ever opens in another app
     private var player: MediaPlayer? = null
+    @Volatile var lastSayError = ""
     private var playJob: Runnable? = null
 
     private fun play(j: JSONObject): Boolean {
@@ -194,6 +196,19 @@ class VoiceService : Service() {
         playJob = job
         main.post(job)
         return true
+    }
+
+    /** Blocking: Speechify, then the v3 player and the subtitle. Used by POST /say and the window's test button. */
+    fun sayLocal(text: String, voice: String = Speechify.voice(this), id0: String = "") {
+        val id = id0.ifBlank { "say-" + System.currentTimeMillis() }
+        try {
+            val sp = Speechify.speak(this, text, voice)
+            onMain { play(JSONObject().put("id", id).put("text", text).put("audio", sp.audioB64).put("words", sp.words)) }
+            lastSayError = ""
+        } catch (e: Exception) {
+            lastSayError = e.message ?: e.javaClass.simpleName
+            onMain { test("Voice Engine could not speak: " + lastSayError, 5.0) }
+        }
     }
 
     private fun stopPlayer() {
@@ -483,6 +498,17 @@ class VoiceService : Service() {
         return when {
             path == "/status" || path == "/" -> 200 to (onMain { status() } ?: JSONObject().put("app", "voiceengine"))
             post && path == "/start" -> { onMain { startReading(j) }; 200 to ok().put("subtitles", conf.subtitles) }
+            // v4: text only; the engine asks Speechify and speaks itself (Marko, 13.11.2026). Answers at once; the voice follows.
+            post && path == "/say" -> {
+                val text = j.optString("text", "").trim()
+                if (text.isEmpty()) 400 to JSONObject().put("ok", false).put("error", "no text")
+                else if (!Speechify.hasKey(this)) 409 to JSONObject().put("ok", false).put("error", "no Speechify key: pick the key file in Voice Engine")
+                else {
+                    val voice = j.optString("voice", "").ifBlank { Speechify.voice(this) }
+                    Thread { sayLocal(text, voice, j.optString("id", "")) }.start()
+                    200 to JSONObject().put("ok", true).put("voice", voice).put("subtitles", conf.subtitles)
+                }
+            }
             post && path == "/play" -> { val r = onMain { play(j) } ?: false; (if (r) 200 else 400) to JSONObject().put("ok", r).put("subtitles", conf.subtitles) }
             post && path == "/pos" -> { onMain { position(j) }; 200 to JSONObject().put("cmd", pendingCmd.getAndSet("")) }
             post && path == "/end" -> { onMain { endReading(j.optString("id", "")) }; 200 to ok() }
@@ -511,5 +537,6 @@ class VoiceService : Service() {
         return JSONObject().put("app", "voiceengine").put("version", v).put("port", port)
             .put("reading", reading).put("paused", paused).put("subtitles", conf.subtitles)
             .put("shown", overlay.shown).put("overlay", overlay.canDraw()).put("text", if (reading) nowText else "")
+            .put("speechify", Speechify.hasKey(this)).put("voice", Speechify.voice(this)).put("say_error", lastSayError)
     }
 }

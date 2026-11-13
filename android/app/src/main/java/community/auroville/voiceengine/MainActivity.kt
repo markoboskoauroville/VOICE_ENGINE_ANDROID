@@ -26,6 +26,8 @@ import android.widget.TextView
  */
 class MainActivity : Activity() {
 
+    companion object { const val PICK_KEY = 41 }
+
     private val bg = Color.parseColor("#111111")
     private val fg = Color.parseColor("#E6E6E6")
     private val dim = Color.parseColor("#8A8A8A")
@@ -53,6 +55,29 @@ class MainActivity : Activity() {
         }
         setContentView(scroll)
         build()
+    }
+
+    private var keyReport = ""
+
+    @Deprecated("plain Activity result")
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        super.onActivityResult(req, res, data)
+        if (req != PICK_KEY || res != RESULT_OK) return
+        val uri = data?.data ?: return
+        keyReport = "Testing…"; build()
+        Thread {
+            val text = runCatching { contentResolver.openInputStream(uri)?.use { String(it.readBytes().take(200_000).toByteArray()) } }.getOrNull().orEmpty()
+            val keys = Speechify.candidates(text)
+            val lines = ArrayList<String>()
+            var kept = false
+            for ((i, k) in keys.withIndex()) {
+                val r = Speechify.test(k)
+                lines += "Key ${i + 1}: $r"
+                if (!kept && r.startsWith("works")) kept = Speechify.saveKey(this, k)
+            }
+            val report = if (keys.isEmpty()) "No key found in that file." else lines.joinToString("\n") + if (kept) "\nKept the first one that works." else "\nNone kept."
+            runOnUiThread { keyReport = report; build() }
+        }.start()
     }
 
     override fun onResume() {
@@ -155,6 +180,20 @@ class MainActivity : Activity() {
                 startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             }))
         }
+
+        // v4 (13.11.2026): the voice is Speechify, spoken here; other computers send text only.
+        box.addView(label("VOICE (SPEECHIFY)"))
+        box.addView(label(if (Speechify.hasKey(this)) "KEY: SAVED · VOICE ${Speechify.voice(this).uppercase()}" else "KEY: NONE YET · PICK THE FILE WITH YOUR SPEECHIFY KEY", 12f, dim, 4))
+        box.addView(row(word("PICK KEY FILE", false) {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), PICK_KEY)
+        }, word("RE-TEST", false) {
+            val k = Speechify.key(this) ?: return@word
+            Thread { val r = Speechify.test(k); runOnUiThread { keyReport = "Key: $r"; build() } }.start()
+        }, word("DELETE", false) { Speechify.deleteKey(this); keyReport = "Key deleted."; build() }))
+        if (keyReport.isNotEmpty()) box.addView(label(keyReport, 14f, fg, 6))
+        box.addView(row(word("SAY A TEST SENTENCE", false) {
+            VoiceService.instance?.let { svc -> Thread { runCatching { svc.sayLocal("This is your voice engine speaking through Speechify.") } }.start() }
+        }))
 
         box.addView(label("SUBTITLES"))
         box.addView(row(word("ON", s.subtitles) { change { it.copy(subtitles = true) } },

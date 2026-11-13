@@ -17,3 +17,6 @@ Marko: "there is a stop, there is a hide, but there is no pause". PAUSE / CONTIN
 
 ## v3, 10.11.2026: phonesay opened files in MX Player
 phonesay pushed an mp3 and fired a VIEW intent at MX Player (the engine only drew for `talk`). adb shell cannot reach Termux (RUN_COMMAND needs a permission shell lacks), so the engine got its own player: /play takes the mp3 in the POST. Test quiet: media volume 3 of 16, restore 13 after. A flag like --help was spoken as text: phonesay now rejects any leading dash.
+
+## v4, 13.11.2026: text in, the engine speaks
+Marko: "No audio anymore ... the other computer sends only text and the API from Speechify is talking." Shipping mp3s over adb (v3 /play) put a second voice pipeline on every caller and a robot voice (espeak) when the caller had no Speechify. The engine now owns the voice: one key, one voice (Beatrice), the same on every caller. A key enters only from a file and is tested when picked.
