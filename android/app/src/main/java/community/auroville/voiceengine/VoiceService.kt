@@ -516,8 +516,7 @@ class VoiceService : Service() {
                     200 to JSONObject().put("ok", true).put("voice", voice).put("subtitles", conf.subtitles)
                 }
             }
-            post && path == "/lock" -> { onMain { lock.on(j.optString("text", "Working on the phone. It will be yours again when this disappears.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state).put("rotation_guard", if (rotation.allowed()) "on" else "needs permission")
-            .put("rotation_caught", rotation.caught).put("rotation_last", rotation.lastAt) }
+            post && path == "/lock" -> { onMain { lock.on(j.optString("text", "Working on the phone. It will be yours again when this disappears.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/unlock" -> { onMain { lock.off() }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/through" -> { onMain { lock.through(j.optLong("ms", 800L)) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/play" -> { val r = onMain { play(j) } ?: false; (if (r) 200 else 400) to JSONObject().put("ok", r).put("subtitles", conf.subtitles) }
@@ -548,6 +547,7 @@ class VoiceService : Service() {
         return JSONObject().put("app", "voiceengine").put("version", v).put("port", port)
             .put("reading", reading).put("paused", paused).put("subtitles", conf.subtitles)
             .put("shown", overlay.shown).put("overlay", overlay.canDraw()).put("text", if (reading) nowText else "")
-            .put("lock", lock.state).put("speechify", Speechify.hasKey(this)).put("key", Speechify.ringLabel(this)).put("voice", Speechify.voice(this)).put("say_error", lastSayError)
+            .put("lock", lock.state).put("speechify", Speechify.hasKey(this))
+            .put("rotation_guard", if (rotation.allowed()) "on" else "needs permission").put("rotation_caught", rotation.caught).put("rotation_last", rotation.lastAt).put("key", Speechify.ringLabel(this)).put("voice", Speechify.voice(this)).put("say_error", lastSayError)
     }
 }
