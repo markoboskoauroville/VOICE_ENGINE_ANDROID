@@ -50,3 +50,9 @@ Marko: "please copy the user interface of my TTT for recording and sending. Simp
 
 Marko refines (13.11.2026, relayed): "Any application using Speechify ... It needs to intelligently find the latest version of the model. I think the name stays the same, only the version is picked up. When it's starting, it checks if the version is correct. Make it future-proof without any special. It's built in the app. Future-proofing is built in the app, and it should be the rule for any app we're making."
 **Status:** saved first. Plan: one small function per language (speechify_model.py in CCMC, used by langsay, voiced.py; Kotlin in Speechify.kt), rule MANTRA_MANIFEST modules/latest-model-at-start.md.
+
+## 13.11.2026: the phones' engine follows the Mac's engine as it is developed today
+
+> also on the phones, please update the engine ... update the engine to fit the engine which we are developing right now on the phone itself
+
+**Status:** saved first (13.11.2026). Plan v22: (1) a /say while one is speaking is queued (never cuts in, 0.6 s gap), with previous / next sentence / skip reading / speed 0.8-1.6 (pitch kept) on the subtitle; (2) the phone's subtitle follows the Mac's v42/v43 rules in portrait: max 4 words at phrase boundaries, spoken word lit, centred in about 76 % of the width, hard black shadow on text and controls, three rows of controls (prev, pause, next, skip / minus, speed, plus / hide, stop), inside system bars and cutout with margins; (3) Speechify simba-3.2 only, v21 candidate reporting kept; (4) no new paid calls.
