@@ -48,7 +48,7 @@ class Lock(private val ctx: Context) {
             setPadding(dp(24), dp(22), dp(24), dp(20))
         }
         card.addView(TextView(ctx).apply {
-            text = "CLAUDE IS USING THE PHONE"; textSize = 20f; setTextColor(orange); gravity = Gravity.CENTER
+            this.text = "CLAUDE IS USING THE PHONE"; textSize = 20f; setTextColor(orange); gravity = Gravity.CENTER
             typeface = Typeface.DEFAULT_BOLD; setShadowLayer(0.01f, 3f, 3f, Color.BLACK)
         })
         val d = TextView(ctx).apply {
