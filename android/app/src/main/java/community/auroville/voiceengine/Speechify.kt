@@ -107,10 +107,11 @@ object Speechify {
         // Forward-only ring, as in TTT: start at the key that spoke last; refused (401/403), out of free use (402) or
         // throttled (429) moves to the next and stays there; wraps to key 1 after the last.
         val start = cursor(c) % all.size
+        val approved = approved(c)
         var last = 0
         for (step in all.indices) {
             val idx = (start + step) % all.size
-            val r = speakWith(all[idx], text, voice)
+            val r = speakWith(all[idx], text, voice, approved)
             if (r.first == 200) { setCursor(c, idx); return r.second!! }
             last = r.first
             if (r.first !in setOf(401, 402, 403, 429)) break
@@ -118,9 +119,53 @@ object Speechify {
         throw IllegalStateException(if (last in setOf(401, 402, 403, 429)) "every Speechify key is out ($last)" else "Speechify answered $last")
     }
 
-    private fun speakWith(key: String, text: String, voice: String): Pair<Int, Spoken?> {
+    // 13.11.2026 (modules/latest-model-at-start.md): the app FINDS the newest simba-X.Y at start and daily (GET /v1/audio/models,
+    // never multilingual) and reports it as a candidate; it USES only the approved model (default simba-3.2) until Marko
+    // approves the new one by ear in an A/B test (prefs "approved"; Voice Engine command: speechify approve simba-X.Y).
+    const val APPROVED_DEFAULT = "simba-3.2"
+    private val FAMILY = Regex("^simba-(\\d+(?:\\.\\d+)*)$")
+
+    fun approved(c: Context): String = p(c).getString("approved", null) ?: APPROVED_DEFAULT
+
+    private fun ver(id: String) = FAMILY.matchEntire(id)!!.groupValues[1].split(".").map { it.toInt() }
+
+    private fun newer(a: String, b: String): Boolean {   // a newer than b
+        val x = ver(a); val y = ver(b)
+        for (i in 0 until maxOf(x.size, y.size)) { val d = x.getOrElse(i) { 0 }.compareTo(y.getOrElse(i) { 0 }); if (d != 0) return d > 0 }
+        return false
+    }
+
+    /** Blocking (never on the main thread): asks the API once a day for the newest family model and stores it as the candidate. */
+    fun detect(c: Context, key: String?) {
+        if (key == null || System.currentTimeMillis() - p(c).getLong("models_at", 0) < 24 * 3600_000L) return
+        try {
+            val conn = (URL("$BASE/audio/models").openConnection() as HttpURLConnection).apply {
+                connectTimeout = 10000; readTimeout = 15000; setRequestProperty("Authorization", "Bearer $key")
+            }
+            if (conn.responseCode != 200) return
+            val arr = JSONObject(conn.inputStream.bufferedReader().use { it.readText() }).optJSONArray("models") ?: return
+            var best: String? = null
+            for (i in 0 until arr.length()) {
+                val m = arr.optJSONObject(i) ?: continue
+                val id = m.optString("id")
+                if (m.optBoolean("deprecated", false) || !FAMILY.matches(id) || id.contains("multilingual")) continue
+                if (best == null || newer(id, best)) best = id
+            }
+            if (best != null) p(c).edit().putString("candidate", best).putLong("models_at", System.currentTimeMillis()).apply()
+        } catch (e: Exception) { /* offline: the stored candidate stays */ }
+    }
+
+    /** For /status (main thread, no network). */
+    fun modelLabel(c: Context): String {
+        val a = approved(c); val cand = p(c).getString("candidate", null)
+        val at = p(c).getLong("models_at", 0)
+        val t = if (at == 0L) "not yet checked" else "checked " + java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale.US).format(java.util.Date(at))
+        return "$a (approved)" + (if (cand != null && newer(cand, a)) "; newer candidate $cand, NOT used until approved by ear" else "") + " ($t)"
+    }
+
+    private fun speakWith(key: String, text: String, voice: String, approved: String): Pair<Int, Spoken?> {
         var lastCode = 0
-        for (model in listOf("simba-3.2", "simba-multilingual", "simba-english")) {   // 13.11.2026: the Mac asks simba-3.2 first; the others only on an error
+        for (model in listOf(approved)) {   // 13.11.2026: the approved model only (simba-3.2 by default)
             val conn = (URL("$BASE/audio/speech").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"; doOutput = true; connectTimeout = 15000; readTimeout = 60000
                 setRequestProperty("Authorization", "Bearer $key"); setRequestProperty("Content-Type", "application/json")

@@ -36,7 +36,7 @@ import java.util.concurrent.atomic.AtomicReference
  * reading to this app on 127.0.0.1 and then its position five times a second, and every answer carries back what the
  * buttons asked for (stop, toggle). Nothing here plays a sound; it draws and it relays.
  *
- *   GET  /status                  {"app":"voiceengine","version","port","reading","paused","subtitles","overlay"}
+ *   GET  /status                  {"app":"voiceengine","version","model","port","reading","paused","subtitles","overlay"}
  *   POST /start {id,text,words}   a reading begins; words [{s,e,t,d}] as MA Reader's (code points, seconds), may be []
  *   POST /pos {id,pos,paused,dur} where the voice is -> {"cmd": "" | "stop" | "toggle"}
  *   POST /end {id}                the voice stopped; the last words stay `linger` seconds
@@ -115,6 +115,13 @@ class VoiceService : Service() {
             startForeground(NID, notification())
         }
         Thread({ serve() }, "voiceengine-http").start()
+        // v21: a newer Speechify model is found at start and daily, reported in /status as a candidate, never used before Marko approves
+        Thread({
+            while (true) {
+                try { Speechify.detect(this, Speechify.keys(this).firstOrNull()) } catch (e: Exception) { }
+                try { Thread.sleep(24 * 3600_000L) } catch (e: Exception) { return@Thread }
+            }
+        }, "voiceengine-model").start()
         // v18: no automatic retry: an unsent answer is kept and goes out only when Marko presses SEND again
     }
     private var retry: Runnable? = null
@@ -569,7 +576,7 @@ class VoiceService : Service() {
             .put("reading", reading).put("paused", paused).put("subtitles", conf.subtitles)
             .put("shown", overlay.shown).put("overlay", overlay.canDraw()).put("text", if (reading) nowText else "")
             .put("lock", lock.state).put("speechify", Speechify.hasKey(this))
-            .put("rotation_guard", if (rotation.allowed()) "on" else "needs permission").put("rotation_caught", rotation.caught).put("rotation_last", rotation.lastAt).put("key", Speechify.ringLabel(this)).put("voice", Speechify.voice(this)).put("say_error", lastSayError)
+            .put("rotation_guard", if (rotation.allowed()) "on" else "needs permission").put("rotation_caught", rotation.caught).put("rotation_last", rotation.lastAt).put("key", Speechify.ringLabel(this)).put("voice", Speechify.voice(this)).put("model", Speechify.modelLabel(this)).put("say_error", lastSayError)
             .put("reply", reply.state.name).put("reply_to", reply.target?.from ?: "").put("reply_text", reply.lastText).put("reply_note", reply.note)
             .put("reply_shown", reply.shown).put("outbox", Outbox.size(this)).put("outbox_last", Outbox.lastResult(this))
             .put("groq", GroqKeys.hasKey(this)).put("groq_key", GroqKeys.ringLabel(this))
