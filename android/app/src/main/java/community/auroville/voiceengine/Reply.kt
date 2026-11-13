@@ -60,8 +60,12 @@ class Reply(private val svc: VoiceService) {
     private var lp: WindowManager.LayoutParams? = null
     private var levelView: LevelView? = null
     private var ringView: RingView? = null
-    private val SILENCE = 35                              // 100 ms steps
-    @Volatile private var stopFlag = false
+        @Volatile private var stopFlag = false
+    @Volatile private var cancelFlag = false
+    @Volatile private var lastWav: ByteArray? = null
+    @Volatile private var retryable = false
+    @Volatile private var resend = false
+    private var listenLabel: TextView? = null
     private var countdown: Runnable? = null
     private var hideJob: Runnable? = null
     private var sendLabel: TextView? = null
@@ -89,16 +93,17 @@ class Reply(private val svc: VoiceService) {
             svc.startActivity(Intent(svc, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("mic", true))
             return
         }
-        stopFlag = false
+        stopFlag = false; cancelFlag = false; retryable = false
         setState(S.RECORDING)
         svc.startForegroundService(Intent(svc, ReplyService::class.java))
     }
 
-    fun stopRecording() { stopFlag = true }
+    fun stopRecording() { stopFlag = true }     // SEND
+    fun cancelRecording() { cancelFlag = true }
 
     fun again() { cancelTimers(); press() }
 
-    fun dismiss() { cancelTimers(); stopFlag = true; close(); state = S.IDLE }
+    fun dismiss() { cancelTimers(); cancelFlag = true; close(); state = S.IDLE }
 
     fun failed(why: String) { main.post { note = why; setState(S.ERROR); autoHide(8000) } }
 
@@ -126,11 +131,12 @@ class Reply(private val svc: VoiceService) {
         var floor = 0.0; var calib = 0
         var thr = 600.0
         var spoke = false
-        var quiet = 0                                      // 100 ms steps since the last loud one
         var steps = 0
         rec.startRecording()
         try {
-            while (!stopFlag && steps < 600) {            // 60 s
+            // Marko, 13.11.2026: "It doesn't stop ... Don't cut automatically." No silence cut, no countdown: the reply
+            // ends only with SEND (or CANCEL); the safety limit is 10 minutes.
+            while (!stopFlag && !cancelFlag && steps < 6000) {
                 val n = rec.read(chunk, 0, chunk.size)
                 if (n <= 0) break
                 steps++
@@ -141,28 +147,34 @@ class Reply(private val svc: VoiceService) {
                 for (i in 0 until n) bb.putShort(chunk[i])
                 pcm.write(bb.array())
                 if (calib < 3) { floor = maxOf(floor, rms); calib++; if (calib == 3) thr = maxOf(600.0, floor * 2.5) }
-                else if (rms > thr) { spoke = true; quiet = 0 } else quiet++
+                else if (rms > thr) spoke = true
                 val lv = (rms / 6000.0).coerceIn(0.0, 1.0).toFloat()
-                main.post { levelView?.set(lv) }
-                if (spoke && quiet >= SILENCE) break         // 3.5 s of silence after speech (he pauses to think; STOP finishes early)
-                val ring = if (spoke && quiet >= SILENCE - 20) (quiet - (SILENCE - 20)) / 20f else 0f   // the last 2 s: a ring fills
-                main.post { ringView?.set(ring) }
-                if (!spoke && steps >= 100) break           // nothing said in 10 s
+                val sec = steps / 10
+                main.post { levelView?.set(lv); listenLabel?.text = "LISTENING %d:%02d  %s".format(sec / 60, sec % 60, target?.from?.takeIf { it.isNotBlank() }?.let { "to $it" } ?: "") }
             }
         } finally { rec.stop(); rec.release() }
+        if (cancelFlag) { main.post { close(); state = S.IDLE }; return }
         if (!spoke) { main.post { note = "I heard nothing."; setState(S.ERROR) }; return }
+        lastWav = wav(pcm.toByteArray(), rate)
         main.post { setState(S.TRANSCRIBING) }
-        val wav = wav(pcm.toByteArray(), rate)
+        transcribeAndSend()
+    }
+
+    /** Groq on the kept recording, then straight to the session that spoke (SEND was his last word). */
+    private fun transcribeAndSend() {
+        val w = lastWav ?: return
         try {
-            val text = GroqKeys.transcribe(svc, wav)
+            val text = GroqKeys.transcribe(svc, w)
             if (text.isBlank()) { main.post { note = "I heard nothing."; setState(S.ERROR) }; return }
             lastText = text
-            main.post { setState(S.CONFIRM); startCountdown() }
+            main.post { send() }
         } catch (e: Exception) {
             val why = e.message ?: "transcription failed"
-            main.post { note = why; setState(S.ERROR) }
+            main.post { note = why; retryable = true; setState(S.ERROR) }
         }
     }
+
+    fun retry() { retryable = false; resend = false; setState(S.TRANSCRIBING); Thread { transcribeAndSend() }.start() }
 
     private fun wav(pcm: ByteArray, rate: Int): ByteArray {
         val h = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
@@ -172,32 +184,32 @@ class Reply(private val svc: VoiceService) {
         return h.array() + pcm
     }
 
-    // ------------------------------------------------------------ SEND after 3 s, AGAIN, the queue
+    // ------------------------------------------------------------ SEND, the queue
 
-    private fun startCountdown() {
-        var left = 3
-        val r = object : Runnable {
-            override fun run() {
-                sendLabel?.text = "SEND ($left)"
-                if (left <= 0) { send(); return }
-                left--
-                main.postDelayed(this, 1000)
+    private fun sendQueued() {
+        note = "Sending …"; setState(S.DONE)
+        Thread {
+            val left = Outbox.flush(svc)
+            main.post {
+                if (left == 0) { note = "Sent: $lastText"; render(); autoHide(4000) }
+                else { note = "Still not reached. Your words are kept: $lastText"; resend = true; setState(S.ERROR) }
             }
-        }
-        countdown = r; main.post(r)
+        }.start()
     }
 
     fun send() {
-        cancelCountdownOnly()
         val t = target ?: Target("", "", "", "")
         val text = lastText
         if (text.isBlank()) { close(); state = S.IDLE; return }
         val at = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US).format(Date())
         Outbox.add(svc, t.from, t.fromId, text, t.relay, t.token, at)
-        note = "Sending …"; setState(S.DONE)
+        note = "Sending: $text"; setState(S.DONE)
         Thread {
             val left = Outbox.flush(svc)
-            main.post { note = if (left == 0) "Sent." else "Not reached: kept, will retry."; render(); autoHide(2500) }
+            main.post {
+                if (left == 0) { note = "Sent: $text"; render(); autoHide(4000) }
+                else { note = "Not sent (the Mac is not reached). Your words are kept: $text"; resend = true; setState(S.ERROR) }   // goes out only when SEND is pressed again
+            }
         }.start()
     }
 
@@ -228,36 +240,30 @@ class Reply(private val svc: VoiceService) {
     private fun render() {
         if (state == S.IDLE) { close(); return }
         val p = panel ?: open() ?: return
-        p.removeAllViews(); levelView = null; ringView = null; sendLabel = null
+        p.removeAllViews(); levelView = null; ringView = null; sendLabel = null; listenLabel = null
         val w = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8f) }
         val who = target?.from?.takeIf { it.isNotBlank() }?.let { "to $it" } ?: ""
         when (state) {
             S.OFFER -> {
                 p.addView(btn("REPLY", true) { press() }, w)
+                p.addView(btn("STOP SPEAKING", false, false) { svc.silence() }, w)
                 p.addView(line(if (who.isBlank()) "answer by voice" else "answer by voice $who", 13f, Color.parseColor("#BBBBBB")))
                 p.addView(btn("✕", false, false) { dismiss() }, LinearLayout.LayoutParams(dp(80f), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6f) })
             }
             S.RECORDING -> {
-                p.addView(line("LISTENING $who", 14f, orange))
+                val ll = line("LISTENING", 14f, orange); listenLabel = ll
+                p.addView(ll)
                 val lv = LevelView(svc); levelView = lv
-                val rg = RingView(svc); ringView = rg
-                val r = LinearLayout(svc).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                r.addView(lv, LinearLayout.LayoutParams(0, dp(18f), 1f))
-                r.addView(rg, LinearLayout.LayoutParams(dp(30f), dp(30f)).apply { marginStart = dp(10f) })
-                p.addView(r, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6f) })
-                p.addView(btn("STOP", true) { stopRecording() }, w)
+                p.addView(lv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(18f)).apply { topMargin = dp(6f) })
+                p.addView(btn("SEND", true) { stopRecording() }, w)
+                p.addView(btn("CANCEL", false, false) { cancelRecording() }, w)
             }
             S.TRANSCRIBING -> p.addView(line("WRITING DOWN WHAT YOU SAID …", 16f, orange))
-            S.CONFIRM -> {
-                p.addView(line(lastText, 20f))
-                val send = btn("SEND (3)", true) { send() }; sendLabel = send
-                p.addView(send, w)
-                p.addView(btn("AGAIN", false, false) { again() }, w)
-            }
             S.DONE -> p.addView(line(note, 18f, orange))
             S.ERROR -> {
                 p.addView(line(note, 16f, Color.parseColor("#FF6B5E")))
-                p.addView(btn("AGAIN", false) { again() }, w)
+                if (resend) p.addView(btn("SEND", true) { resend = false; setState(S.TRANSCRIBING); main.post { sendQueued() } }, w)
+                else if (retryable) p.addView(btn("TRY AGAIN", true) { retry() }, w) else p.addView(btn("AGAIN", false) { again() }, w)
                 p.addView(btn("✕", false, false) { dismiss() }, LinearLayout.LayoutParams(dp(80f), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6f) })
             }
             else -> {}

@@ -115,14 +115,7 @@ class VoiceService : Service() {
             startForeground(NID, notification())
         }
         Thread({ serve() }, "voiceengine-http").start()
-        // v16: an answer that could not reach the Mac waits here and is tried again every 20 s
-        retry = object : Runnable {
-            override fun run() {
-                if (Outbox.size(this@VoiceService) > 0) pool.execute { runCatching { Outbox.flush(this@VoiceService) } }
-                main.postDelayed(this, 20_000)
-            }
-        }
-        main.postDelayed(retry!!, 20_000)
+        // v18: no automatic retry: an unsent answer is kept and goes out only when Marko presses SEND again
     }
     private var retry: Runnable? = null
 
@@ -217,10 +210,13 @@ class VoiceService : Service() {
     }
 
     /** Blocking: Speechify, then the v3 player and the subtitle. Used by POST /say and the window's test button. */
+    @Volatile private var sayGen = 0
     fun sayLocal(text: String, voice: String = Speechify.voice(this), id0: String = "", replyMsg: Boolean = false) {
         val id = id0.ifBlank { "say-" + System.currentTimeMillis() }
+        val gen = sayGen
         try {
             val sp = Speechify.speak(this, text, voice)
+            if (gen != sayGen) return          // STOP was pressed while Speechify was still working: nothing plays
             onMain { play(JSONObject().put("id", id).put("text", text).put("audio", sp.audioB64).put("words", sp.words)) }
             lastSayError = ""
         } catch (e: Exception) {
@@ -232,7 +228,7 @@ class VoiceService : Service() {
 
     /** v16: the reply (talking back, Reply.kt) and the queue that retries the unsent answers. */
     val reply by lazy { Reply(this) }
-    fun silence() { if (player != null) stopPlayer() else if (reading) pendingCmd.set("stop"); hidePressed() }
+    fun silence() { sayGen++; if (player != null) stopPlayer() else if (reading) pendingCmd.set("stop"); hidePressed() }
 
     private fun stopPlayer() {
         playJob?.let { main.removeCallbacks(it) }; playJob = null
@@ -339,6 +335,7 @@ class VoiceService : Service() {
 
     /** STOP: the reading ends completely (the talker hears it in its next /pos, within a fifth of a second). */
     fun stopPressed() {
+        sayGen++                      // a voice still being fetched must not start afterwards ("It doesn't stop", 13.11.2026)
         if (player != null) stopPlayer()
         else if (reading) pendingCmd.set("stop")
         hidePressed()
