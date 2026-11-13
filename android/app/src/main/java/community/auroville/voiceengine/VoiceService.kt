@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicReference
  *   POST /start {id,text,words}   a reading begins; words [{s,e,t,d}] as MA Reader's (code points, seconds), may be []
  *   POST /pos {id,pos,paused,dur} where the voice is -> {"cmd": "" | "stop" | "toggle"}
  *   POST /end {id}                the voice stopped; the last words stay `linger` seconds
+ *   POST /lock {text} | /unlock | /through {ms}   v7: "Claude is using the phone" (blocks touches, LET ME USE IT overrides)
  *   POST /say {text, voice?, id?}  v4: text only; the engine asks Speechify (its own key, Beatrice by default) and speaks
  *   POST /play {id,text,audio,words,dur}   v3: the engine plays the sound itself (audio = base64 mp3), with the subtitle
  *   POST /test {text,seconds}     a subtitle without a voice, to see how it looks
@@ -166,6 +167,8 @@ class VoiceService : Service() {
     // v3: the engine's own player (phonesay, 10.11.2026), so no audio file ever opens in another app
     private var player: MediaPlayer? = null
     @Volatile var lastSayError = ""
+    // v7: the phone lock (Claude is using the phone), see Lock.kt
+    val lock by lazy { Lock(this) }
     private var playJob: Runnable? = null
 
     private fun play(j: JSONObject): Boolean {
@@ -509,6 +512,9 @@ class VoiceService : Service() {
                     200 to JSONObject().put("ok", true).put("voice", voice).put("subtitles", conf.subtitles)
                 }
             }
+            post && path == "/lock" -> { onMain { lock.on(j.optString("text", "Working on the phone. It will be yours again when this disappears.")) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
+            post && path == "/unlock" -> { onMain { lock.off() }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
+            post && path == "/through" -> { onMain { lock.through(j.optLong("ms", 800L)) }; 200 to JSONObject().put("ok", true).put("lock", lock.state) }
             post && path == "/play" -> { val r = onMain { play(j) } ?: false; (if (r) 200 else 400) to JSONObject().put("ok", r).put("subtitles", conf.subtitles) }
             post && path == "/pos" -> { onMain { position(j) }; 200 to JSONObject().put("cmd", pendingCmd.getAndSet("")) }
             post && path == "/end" -> { onMain { endReading(j.optString("id", "")) }; 200 to ok() }
@@ -537,6 +543,6 @@ class VoiceService : Service() {
         return JSONObject().put("app", "voiceengine").put("version", v).put("port", port)
             .put("reading", reading).put("paused", paused).put("subtitles", conf.subtitles)
             .put("shown", overlay.shown).put("overlay", overlay.canDraw()).put("text", if (reading) nowText else "")
-            .put("speechify", Speechify.hasKey(this)).put("key", Speechify.ringLabel(this)).put("voice", Speechify.voice(this)).put("say_error", lastSayError)
+            .put("lock", lock.state).put("speechify", Speechify.hasKey(this)).put("key", Speechify.ringLabel(this)).put("voice", Speechify.voice(this)).put("say_error", lastSayError)
     }
 }
