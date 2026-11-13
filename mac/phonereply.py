@@ -113,8 +113,8 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != "/reply":
             return self._send(404, {"error": "no such path"})
-        if self.headers.get("X-Mantra-Token", "") != token():
-            return self._send(401, {"error": "token"})
+        if self.headers.get("X-Mantra-Token", "") != token() and not own_device(self.client_address[0]):
+            return self._send(401, {"error": "not one of Marko's devices on Tailscale, and no token"})
         try:
             n = int(self.headers.get("Content-Length", "0"))
             j = json.loads(self.rfile.read(min(n, 65536)) or b"{}")
@@ -125,6 +125,26 @@ class H(BaseHTTPRequestHandler):
             return self._send(400, {"error": "no text"})
         self._send(200, deliver(str(j.get("to_id", "")), str(j.get("to", "")), text, str(j.get("at", "")), str(j.get("id", ""))))
 
+
+
+_OWN = {}
+def own_device(ip):
+    """Marko, 13.11.2026: "All the phones are online. Please use the tail scale". Tailscale is the trust boundary:
+    a caller on the tailnet whose machine belongs to his login needs no token (cached per IP)."""
+    if not ip.startswith("100."):
+        return False
+    if ip in _OWN:
+        return _OWN[ip]
+    ok = False
+    for exe in ("/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale", "tailscale"):
+        try:
+            out = subprocess.run([exe, "whois", "--json", ip], capture_output=True, text=True, timeout=5).stdout
+            ok = "marko.bosko@" in json.loads(out).get("UserProfile", {}).get("LoginName", "")
+            break
+        except Exception:
+            continue
+    _OWN[ip] = ok
+    return ok
 
 def tailscale_ip():
     for exe in ("/usr/local/bin/tailscale", "tailscale"):
