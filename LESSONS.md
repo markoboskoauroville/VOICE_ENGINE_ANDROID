@@ -30,3 +30,9 @@ The Mac got the hard shadow in v37 (8.11.2026) and the phone never did; Marko no
 - Recording from an overlay tap needs a foreground service of type microphone (ReplyService) and RECORD_AUDIO granted first; startForeground throws SecurityException otherwise.
 - Plain http to the Mac needs usesCleartextTraffic (targetSdk 35 blocks it). The emulator reaches the Mac at 10.0.2.2.
 - The sender gives the phone the relay address and token inside the message, so the phone needs no setting and the token travels only as text.
+
+## 13.11.2026: the phones did not sound like the Mac (Beatrice)
+- Marko: "The Beatrice sounds here beautiful, but on the phone something is wrong." Cause: the app asked Speechify with model `simba-multilingual` first (then `simba-english`), while the Mac (langsay, CCMC speechify.py) asks `simba-3.2`, the model beatrice_32 is made for. Different model, different voice. The playback path was already right (MediaPlayer, USAGE_MEDIA / CONTENT_TYPE_SPEECH, no Equalizer or LoudnessEnhancer), so nothing there was changed.
+- Measured, one sentence (the same 105 characters, voice beatrice_32, mp3 128 kbit/s, 24 kHz mono, two requests only): simba-3.2 lasts 6.77 s, RMS 0.104 (-19.6 dBFS), peak 0.562; simba-multilingual lasts 6.58 s (3 % faster), RMS 0.081 (-21.8 dBFS, 2.2 dB quieter), peak 0.541. Band RMS 0-300 Hz 0.059 vs 0.050, 300-1000 Hz 0.055 vs 0.039, 1-4 kHz 0.031 vs 0.020: the multilingual render has 2-4 dB less body and presence, which is the thinner voice Marko heard on the phones.
+- The Mac also levels what it plays (voiced.py Reader: speech RMS to -20 dBFS, true peak -3 dBFS, resampled once). That is the Mac's player, not the voice; the phone plays the mp3 as sent. Not copied (a LoudnessEnhancer is processing; the phone has its volume key).
+- Fix: model order is now simba-3.2, simba-multilingual, simba-english; the later ones only when Speechify answers an error other than a key problem.

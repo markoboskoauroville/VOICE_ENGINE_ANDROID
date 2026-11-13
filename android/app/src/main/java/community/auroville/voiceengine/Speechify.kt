@@ -120,7 +120,7 @@ object Speechify {
 
     private fun speakWith(key: String, text: String, voice: String): Pair<Int, Spoken?> {
         var lastCode = 0
-        for (model in listOf("simba-multilingual", "simba-english")) {
+        for (model in listOf("simba-3.2", "simba-multilingual", "simba-english")   // 13.11.2026: the Mac asks simba-3.2 (beatrice_32 is a 3.2 voice); the others only on an error) {
             val conn = (URL("$BASE/audio/speech").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"; doOutput = true; connectTimeout = 15000; readTimeout = 60000
                 setRequestProperty("Authorization", "Bearer $key"); setRequestProperty("Content-Type", "application/json")
