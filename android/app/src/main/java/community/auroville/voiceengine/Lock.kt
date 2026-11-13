@@ -39,51 +39,73 @@ class Lock(private val ctx: Context) {
 
     private fun dp(v: Int) = (v * ctx.resources.displayMetrics.density).toInt()
 
+    private var bar: LinearLayout? = null
+
+    /**
+     * v12 (Marko, 13.11.2026: "very rude ... in the middle of the screen ... I cannot see what you are doing. Please put
+     * this at the top ... be aware of the notch of the camera ... on the left and right side just say what you are doing
+     * and give me the button to take over"). Nothing is dimmed and nothing sits in the middle: one thin dark bar at the
+     * very top of the app area (Android draws its own status bar above every app overlay, so the bar sits right under
+     * the clock and icons, the full width): left CLAUDE · what it does, a gap where the camera hole is, right TAKE OVER.
+     * The rest of the screen stays fully visible; touches there are swallowed by an invisible layer.
+     */
     fun on(text: String) {
         lastText = text
         closeBlob()
-        detail?.let { it.text = text; if (state == "on") { root?.visibility = View.VISIBLE; return } }
+        if (state == "on" && detail != null) { detail?.text = "CLAUDE · $text"; root?.visibility = View.VISIBLE; return }
         if (!Settings.canDrawOverlays(ctx)) return
         close()
         val orange = Color.parseColor("#E8A33D")
-        val card = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
-            background = GradientDrawable().apply { cornerRadius = dp(18).toFloat(); setColor(Color.parseColor("#F2161A20")); setStroke(dp(2), orange) }
-            setPadding(dp(24), dp(22), dp(24), dp(20))
-        }
-        card.addView(TextView(ctx).apply {
-            this.text = "CLAUDE IS USING THE PHONE"; textSize = 20f; setTextColor(orange); gravity = Gravity.CENTER
-            typeface = Typeface.DEFAULT_BOLD; setShadowLayer(0.01f, 3f, 3f, Color.BLACK)
-        })
-        val d = TextView(ctx).apply {
-            this.text = text; textSize = 15f; setTextColor(Color.parseColor("#E6EDF3")); gravity = Gravity.CENTER
-            setPadding(0, dp(10), 0, dp(16))
-        }
-        card.addView(d)
-        card.addView(TextView(ctx).apply {
-            this.text = "LET ME USE IT"; textSize = 16f; setTextColor(Color.BLACK); gravity = Gravity.CENTER
-            typeface = Typeface.DEFAULT_BOLD
-            background = GradientDrawable().apply { cornerRadius = dp(10).toFloat(); setColor(orange) }
-            setPadding(dp(22), dp(12), dp(22), dp(12))
-            setOnClickListener { override() }
-        })
-        val r = FrameLayout(ctx).apply {
-            setBackgroundColor(Color.argb(110, 0, 0, 0))
-            isClickable = true                        // every touch outside the button stops here
-            setOnTouchListener { _, _ -> true }
-            // In the upper third (13.11.2026: centred, the spoken subtitle sat right on top of it).
-            addView(card, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL or Gravity.TOP).apply {
-                leftMargin = dp(24); rightMargin = dp(24); topMargin = (ctx.resources.displayMetrics.heightPixels * 0.18f).toInt()
-            })
-        }
-        val lp = WindowManager.LayoutParams(
+        // The invisible layer: every touch outside the bar stops here.
+        val r = FrameLayout(ctx).apply { isClickable = true; setOnTouchListener { _, _ -> true } }
+        val full = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         )
-        try { wm.addView(r, lp) } catch (e: Exception) { return }
-        root = r; detail = d; state = "on"
+        try { wm.addView(r, full) } catch (e: Exception) { return }
+        root = r
+        // The bar: text left, a gap for the camera hole in the middle, the button right.
+        val d = TextView(ctx).apply {
+            this.text = "CLAUDE · $text"; textSize = 13f; setTextColor(orange); typeface = Typeface.DEFAULT_BOLD
+            maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; gravity = Gravity.CENTER_VERTICAL or Gravity.START
+        }
+        val take = TextView(ctx).apply {
+            this.text = "TAKE OVER"; textSize = 13f; setTextColor(Color.BLACK); typeface = Typeface.DEFAULT_BOLD; gravity = Gravity.CENTER
+            background = GradientDrawable().apply { cornerRadius = dp(8).toFloat(); setColor(orange) }
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            setOnClickListener { override() }
+        }
+        val hole = View(ctx)
+        val b = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.parseColor("#F2101114"))
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            addView(FrameLayout(ctx).apply { addView(d, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_VERTICAL or Gravity.START)) },
+                LinearLayout.LayoutParams(0, -2, 1f))
+            addView(hole, LinearLayout.LayoutParams(dp(56), 1))
+            addView(FrameLayout(ctx).apply { addView(take, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_VERTICAL or Gravity.END)) },
+                LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        val top = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP
+            if (android.os.Build.VERSION.SDK_INT >= 28) layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        try { wm.addView(b, top) } catch (e: Exception) { }
+        // The camera hole: its real width once the bar knows its insets.
+        b.setOnApplyWindowInsetsListener { v, ins ->
+            val cut = ins.displayCutout?.boundingRects?.firstOrNull { it.top == 0 }
+            if (cut != null) hole.layoutParams = LinearLayout.LayoutParams(cut.width() + dp(12), 1)
+            v.onApplyWindowInsets(ins)
+        }
+        bar = b; detail = d; state = "on"
     }
 
     /** The caller's own tap or screenshot: the lock steps aside for [ms] and comes back (unless it was lifted). */
@@ -155,6 +177,7 @@ class Lock(private val ctx: Context) {
     private fun close() {
         back?.let { main.removeCallbacks(it) }; back = null
         root?.let { try { wm.removeView(it) } catch (e: Exception) { } }
-        root = null; detail = null
+        bar?.let { try { wm.removeView(it) } catch (e: Exception) { } }
+        root = null; bar = null; detail = null
     }
 }
