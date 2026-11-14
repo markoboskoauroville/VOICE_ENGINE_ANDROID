@@ -41,3 +41,9 @@ The Mac got the hard shadow in v37 (8.11.2026) and the phone never did; Marko no
 - phonesay fell back to `langsay`, and langsay routed to phonesay: an endless loop if the phone was down. The fallback now
   sets LANGSAY_LOCAL=1 and only runs while the Mac's speaker is on.
 - `adb devices` can show a passing 127.0.0.1:<port> forward for a phone; voiceout never stores those addresses.
+
+## v27, 14.11.2026: the blob that could not be removed
+- Cause on the Pixel (v26): `serve()` ran once on a thread; when its accept loop broke (IOException) or all 16 ports were busy it simply returned, and nothing restarted it. The service and the overlay windows lived on, so the blob stayed while /unlock was refused. An overlay must have its own exit that does not depend on the server: timeout, a liveness check of the server, an X and a long-press.
+- Inside `apply{}` on WindowManager.LayoutParams, `x = ...` hits a local `val x` of the same name (build failed, run 43584781879 red, fixed in the next push). Do not name locals x/y near LayoutParams.apply.
+- `am stopservice` and `cmd activity stop-service` fail ("Error stopping service") on this foreground service; uiautomator does not see the overlay. Test the overlay by screenshot and /status; the server cannot be killed from outside without a debuggable build.
+- adb with several devices: use `-s emulator-5554`; in zsh a variable holding "adb -s x" does not word-split, use a script wrapper.

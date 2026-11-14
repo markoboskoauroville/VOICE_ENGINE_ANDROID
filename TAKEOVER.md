@@ -120,3 +120,5 @@ MacServer.kt: engine "Mac (free)" (default) sends text to the Mac's /render over
 
 **State 14.11.2026: voiceout** (mac/voiceout.py): the speakers list (This Mac + every phone with Voice Engine), read by
 langsay, phonesay and voiced; phonesay `--no-mac`, several addresses per phone, and no more langsay↔phonesay loop.
+
+**State 14.11.2026: v27** The lock bar and the orange blob never outlive their owner (Marko: "it's persistent on the screen. I cannot get rid of it."). Blob closes after 10 min, the lock after 15 min (each /lock renews), both at once when the HTTP server is closed for two checks (4 s) or the service is destroyed; a small X or a 0.7 s long-press on the blob removes it for good; the service clears any lock/blob at start; the HTTP server loop is now supervised and restarts after 1 s if accept dies or no port was free. Run: see GitHub Actions, release v27 Latest.
