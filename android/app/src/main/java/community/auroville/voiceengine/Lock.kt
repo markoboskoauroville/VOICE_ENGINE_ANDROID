@@ -202,7 +202,7 @@ class Lock(private val ctx: Context) {
             typeface = Typeface.DEFAULT_BOLD
         }
         // v27: a small X removes the blob for good; so does a long press on it.
-        val x = TextView(ctx).apply {
+        val closeX = TextView(ctx).apply {
             this.text = "\u2715"; textSize = 16f; setTextColor(Color.BLACK); gravity = Gravity.CENTER
             typeface = Typeface.DEFAULT_BOLD
             contentDescription = "Dismiss"
@@ -214,7 +214,7 @@ class Lock(private val ctx: Context) {
             background = GradientDrawable().apply { cornerRadius = dp(22).toFloat(); setColor(orange); setStroke(dp(2), Color.BLACK) }
             setPadding(dp(14), dp(8), dp(8), dp(8))
             elevation = dp(6).toFloat()
-            addView(t); addView(x)
+            addView(t); addView(closeX)
         }
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
