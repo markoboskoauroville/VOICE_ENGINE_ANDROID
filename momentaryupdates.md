@@ -70,3 +70,9 @@ Marko refines (13.11.2026, relayed): "Any application using Speechify ... It nee
 > we need to make connection between TTT and this voice engine because when I'm typing, I'm talking to my keyboard, voice engine is talking over me ... What is happening with TTT right now, it plays the pause in the system to all players. So we can use that ... Look at the TTT code, what is happening, what signal it says when I press record, and what TTT does when I send the transcription. It releases the player. So the player is our voice also can be acting as a player. So nothing needs to be built inside TTT. Only voice needs to be ... act as a player ... need to wait until I finish dictation. If I start dictation, then you need to stop.
 
 **Status:** saved first (13.11.2026). v24 in progress.
+
+## 14.11.2026: the blob must go (v27)
+
+> Give me the phone back to Claude the Guard. First of all, it's an old version, and it's persistent on the screen. I cannot get rid of it. Please get rid of all these bugs.
+
+**Status:** saved first (14.11.2026). Found on the Pixel 7: v26, the orange blob GIVE THE PHONE BACK TO CLAUDE stayed while the HTTP server refused connections, so /unlock could not remove it. v27 plan: the blob and the lock close by themselves after a timeout, whenever the server or service dies, a long-press or a small X dismisses the blob for good, a stale lock or blob is cleared at service start, and the HTTP server is restarted by a watchdog if its accept loop dies.
