@@ -117,3 +117,6 @@ Mac side in `mac/`: `phonereply.py serve` (port 8875, 127.0.0.1 + Tailscale, tok
 
 ## v24-v26 (13.11.2026)
 MacServer.kt: engine "Mac (free)" (default) sends text to the Mac's /render over Tailscale (3 s), Speechify only as a counted fallback; REPLY uses the Mac's /hear first, Groq after. `POST /engine {engine, host}`. The voice is a proper player: audio focus (GAIN_TRANSIENT, delayed) + MediaSession; TTT's record (GAIN_TRANSIENT_EXCLUSIVE) pauses it at the word, its release resumes it. `POST /focus-test {seconds}` stands in for TTT's button. Cost Agent gate: none yet, fallbacks only logged.
+
+**State 14.11.2026: voiceout** (mac/voiceout.py): the speakers list (This Mac + every phone with Voice Engine), read by
+langsay, phonesay and voiced; phonesay `--no-mac`, several addresses per phone, and no more langsay↔phonesay loop.

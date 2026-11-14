@@ -54,3 +54,10 @@ after its end.
 
 ## From the Mac: phonesay (v3, 10.11.2026)
 `phonesay "text" [hr|en]` renders with langsay --out and POSTs it to the app's /play over adb forward; the engine plays it with subtitles. Never open an audio file in a player app for Marko. Needs v3 on the phone. Test quiet (media volume 3, restore after).
+
+## Where the voice speaks: voiceout (14.11.2026)
+`voiceout list|scan|on <id>|off <id>|only <id>` (mac/voiceout.py, linked in ~/.local/bin). State ~/.voice/outputs.json:
+`{"mac": bool, "phones": [{id, name, addrs, on}]}`; ids mac, pixel7 (Pixel_7), nothing (A142), emulator. It replaced
+~/.voice/route. langsay, phonesay (`--no-mac`, `--phone a,b`), voiced.py POST /speak (unless `here: true`) and the
+Voice Engine window's SPEAKERS tab all read it. Mac speaker off = nothing plays on the Mac, also when a phone is unreachable.
+Run log: 14.11.2026 voiceout built; route migrated (Mac off, Pixel on); langsay and /speak both reached the Pixel.

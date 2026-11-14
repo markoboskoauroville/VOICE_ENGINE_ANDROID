@@ -36,3 +36,8 @@ The Mac got the hard shadow in v37 (8.11.2026) and the phone never did; Marko no
 - Measured, one sentence (the same 105 characters, voice beatrice_32, mp3 128 kbit/s, 24 kHz mono, two requests only): simba-3.2 lasts 6.77 s, RMS 0.104 (-19.6 dBFS), peak 0.562; simba-multilingual lasts 6.58 s (3 % faster), RMS 0.081 (-21.8 dBFS, 2.2 dB quieter), peak 0.541. Band RMS 0-300 Hz 0.059 vs 0.050, 300-1000 Hz 0.055 vs 0.039, 1-4 kHz 0.031 vs 0.020: the multilingual render has 2-4 dB less body and presence, which is the thinner voice Marko heard on the phones.
 - The Mac also levels what it plays (voiced.py Reader: speech RMS to -20 dBFS, true peak -3 dBFS, resampled once). That is the Mac's player, not the voice; the phone plays the mp3 as sent. Not copied (a LoudnessEnhancer is processing; the phone has its volume key).
 - Fix: model order is now simba-3.2, simba-multilingual, simba-english; the later ones only when Speechify answers an error other than a key problem.
+
+## 14.11.2026
+- phonesay fell back to `langsay`, and langsay routed to phonesay: an endless loop if the phone was down. The fallback now
+  sets LANGSAY_LOCAL=1 and only runs while the Mac's speaker is on.
+- `adb devices` can show a passing 127.0.0.1:<port> forward for a phone; voiceout never stores those addresses.
