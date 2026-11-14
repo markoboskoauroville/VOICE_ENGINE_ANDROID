@@ -119,6 +119,9 @@ class VoiceService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // v27: a lock or blob left by an earlier run is cleared at once; nothing stays that nobody owns
+        lock.serverAlive = { server?.isClosed == false }
+        lock.off()
         conf = SubSettings.load(this)
         rotation.start()
         overlay = SubtitleOverlay(this, SubActions(
@@ -135,7 +138,15 @@ class VoiceService : Service() {
         } else {
             startForeground(NID, notification())
         }
-        Thread({ serve() }, "voiceengine-http").start()
+        // v27: the server is kept up: if its accept loop dies or no port was free, it starts again after a second
+        Thread({
+            while (instance === this) {
+                try { serve() } catch (e: Exception) { }
+                if (instance !== this) break
+                server = null
+                try { Thread.sleep(1000) } catch (e: Exception) { return@Thread }
+            }
+        }, "voiceengine-http").start()
         // v21: a newer Speechify model is found at start and daily, reported in /status as a candidate, never used before Marko approves
         Thread({
             while (true) {
@@ -160,6 +171,7 @@ class VoiceService : Service() {
         rotation.stop()
         reply.close()
         instance = null
+        try { lock.off() } catch (e: Exception) { }
         main.removeCallbacksAndMessages(null)
         overlay.close()
         try { server?.close() } catch (e: java.io.IOException) { }
