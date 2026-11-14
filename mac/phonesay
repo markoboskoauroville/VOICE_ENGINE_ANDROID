@@ -6,7 +6,10 @@
                                                 phone writes it down (Groq whisper-large-v3) and sends the TEXT back to
                                                 <session> through phonereply.py (see its docstring)
   phonesay --from me "text"                     <session> = the session this command runs in
-  --phone ADDR                                  adb serial (default $NOTHING_ADB or 100.67.149.40:5555; the emulator is emulator-5554)
+  --phone ADDR[,ADDR]                           adb serials of ONE phone, the first that answers (default $NOTHING_ADB or
+                                                100.67.149.40:5555, then the Pixel 7; the emulator is emulator-5554)
+  --no-mac                                      phone not reached: say nothing on the Mac (langsay speaks there itself)
+Not reached and no --no-mac: the Mac speaks it only while its speaker is on in voiceout (14.11.2026); exit 1 otherwise.
 
 Voice Engine Android v16+: POST /say {text, from, from_id, reply:true, relay, token}. Never an mp3: voice-text-only.md.
 Marko, 13.11.2026: "the other computer sends only text and the API from Speechify is talking" / "back and forth by voice".
@@ -61,7 +64,7 @@ def reachable(serial):
 
 def pick_phone(given):
     """--phone, else $NOTHING_ADB, else the Pixel 7 (Tailscale adb); the first that answers. None answering: the first, and the Mac speaks."""
-    cands = [given] if given else [os.environ.get("NOTHING_ADB", "100.67.149.40:5555"), "100.70.23.53:5555"]
+    cands = [x for x in given.split(",") if x] if given else [os.environ.get("NOTHING_ADB", "100.67.149.40:5555"), "100.70.23.53:5555"]
     for c in cands:
         if reachable(c):
             return c
@@ -70,12 +73,13 @@ def pick_phone(given):
 
 def main():
     a = sys.argv[1:]
-    frm = None; phone = None
+    frm = None; phone = None; nomac = False
     pos = []
     i = 0
     while i < len(a):
         if a[i] == "--from" and i + 1 < len(a): frm = a[i + 1]; i += 2
         elif a[i] == "--phone" and i + 1 < len(a): phone = a[i + 1]; i += 2
+        elif a[i] == "--no-mac": nomac = True; i += 1
         elif a[i].startswith("-"): sys.exit(f"phonesay: unknown option '{a[i]}'\n" + __doc__)
         else: pos.append(a[i]); i += 1
     if not pos: sys.exit('usage: phonesay [--from "<session>"] "text" [hr|en]')
@@ -112,8 +116,18 @@ def main():
                                                           {"Content-Type": "application/json"}), timeout=15)
         print("speaking on the phone (Voice Engine)" + (", REPLY button up" if frm else ""), r.read().decode()[:120])
     except Exception as e:
+        mac = True
+        try:
+            spec = importlib.util.spec_from_file_location("voiceout", REPO + "/voiceout.py")
+            vo = importlib.util.module_from_spec(spec); spec.loader.exec_module(vo); mac = vo.targets()[1]
+        except Exception:
+            pass
+        if nomac or not mac:
+            print(f"phone {phone} not reached ({e})" + ("" if nomac else ", the Mac's speaker is off: silent"), file=sys.stderr)
+            sys.exit(1)
         print(f"phone not reached ({e}): speaking on the Mac", file=sys.stderr)
-        subprocess.run(["langsay", lang, text])
+        # LANGSAY_LOCAL: langsay speaks on this Mac only (no routing back to the phones, which looped before 14.11.2026)
+        subprocess.run(["langsay", lang, text], env={**os.environ, "LANGSAY_LOCAL": "1"})
     finally:
         adb(phone, "forward", "--remove", f"tcp:{port}")
 
